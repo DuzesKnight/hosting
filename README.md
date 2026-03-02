@@ -17,26 +17,6 @@ Automated billing · One-click plugins · VPS reselling · Admin dashboard
 
 ---
 
-## 🚀 Quick Start
-
-```bash
-git clone https://github.com/your-org/gamehost.git
-cd gamehost
-bash install.sh
-```
-
-That's it. The installer auto-generates secrets, builds containers, runs migrations, and starts everything.
-
-| Service | URL |
-|---------|-----|
-| Website | `http://your-ip` (Nginx on port 80) |
-| API | `http://your-ip:4000/api` |
-| Health | `http://your-ip:4000/api/health` |
-
-> **Next step →** Edit `.env` to add your OAuth & Pterodactyl keys. See [Configuration](#%EF%B8%8F-configuration).
-
----
-
 ## ✨ Features
 
 <table>
@@ -56,66 +36,413 @@ That's it. The installer auto-generates secrets, builds containers, runs migrati
 
 ---
 
-## 📦 Requirements
+## 📦 What You Need Before Starting
 
-- **Docker** 20.10+ — [install guide](https://docs.docker.com/engine/install/)
-- **Docker Compose** 2.0+ — [install guide](https://docs.docker.com/compose/install/)
-- **Git** — `sudo apt install git`
+You need a **Linux VPS** (Ubuntu 20.04 or newer recommended) and a **Pterodactyl Panel** already setup.
+
+### Install Docker & Docker Compose
+
+If you don't have Docker yet, run this on your VPS:
 
 ```bash
-# Verify
-docker --version && docker compose version && git --version
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Add your user to docker group (so you don't need sudo)
+sudo usermod -aG docker $USER
+
+# Log out and log back in for the group change to work
+exit
+```
+
+Log back in via SSH, then verify:
+
+```bash
+docker --version
+docker compose version
+```
+
+You should see version numbers. If `docker compose` doesn't work, try `docker-compose` — both are supported.
+
+### Install Git
+
+```bash
+sudo apt install git -y
+git --version
 ```
 
 ---
 
-## ⚙️ Configuration
+## 🚀 Full Production Deployment Guide (Step by Step)
 
-After install, edit `.env` and restart:
+> This guide assumes you have a fresh Ubuntu VPS with Docker installed. Follow every step in order.
+
+### Step 1 — Connect to your VPS
 
 ```bash
-nano .env
-docker compose down && docker compose up -d
+ssh root@your-server-ip
 ```
 
-### Required
+### Step 2 — Clone the project
 
-<table>
-<tr>
-<th>Section</th>
-<th>Variables</th>
-<th>How to Get</th>
-</tr>
-<tr>
-<td><b>App URLs</b></td>
-<td><code>APP_URL</code>, <code>BACKEND_URL</code>, <code>NEXT_PUBLIC_API_URL</code></td>
-<td>Set to your domain</td>
-</tr>
-<tr>
-<td><b>Google OAuth</b></td>
-<td><code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, <code>GOOGLE_CALLBACK_URL</code></td>
-<td><a href="https://console.cloud.google.com/apis/credentials">Google Cloud Console</a></td>
-</tr>
-<tr>
-<td><b>Discord OAuth</b></td>
-<td><code>DISCORD_CLIENT_ID</code>, <code>DISCORD_CLIENT_SECRET</code>, <code>DISCORD_CALLBACK_URL</code></td>
-<td><a href="https://discord.com/developers/applications">Discord Developer Portal</a></td>
-</tr>
-<tr>
-<td><b>Pterodactyl</b></td>
-<td><code>PTERODACTYL_URL</code>, <code>PTERODACTYL_APP_KEY</code>, <code>PTERODACTYL_CLIENT_KEY</code></td>
-<td>Panel → Application API + Account API</td>
-</tr>
-</table>
+```bash
+cd /opt
+git clone https://github.com/your-org/gamehost.git
+cd gamehost
+```
 
-> **Callback URLs format:**  
-> Google: `https://yourdomain.com/api/auth/google/callback`  
-> Discord: `https://yourdomain.com/api/auth/discord/callback`
+> `/opt/gamehost` is the recommended location. You can use any directory.
 
-### Optional
+### Step 3 — Run the installer
+
+```bash
+bash install.sh
+```
+
+This single command does everything:
+
+- ✅ Creates `nginx/ssl` and `backups` directories
+- ✅ Copies `.env.example` → `.env`
+- ✅ Generates random passwords for JWT, sessions, database, and Redis
+- ✅ Builds all 5 Docker containers from scratch
+- ✅ Starts PostgreSQL 16, Redis 7, Backend, Frontend, and Nginx
+- ✅ Waits for the database to be ready
+- ✅ Runs Prisma database migrations to create all tables
+
+Wait for it to finish. You'll see:
+
+```
+============================================
+ GameHost installed successfully!
+============================================
+
+ Frontend: http://localhost:3000
+ Backend:  http://localhost:4000
+```
+
+### Step 4 — Verify everything is running
+
+```bash
+docker compose ps
+```
+
+You should see 5 containers, all showing `Up`:
+
+```
+gamehost-db        Up (healthy)
+gamehost-redis     Up (healthy)
+gamehost-backend   Up
+gamehost-frontend  Up
+gamehost-nginx     Up
+```
+
+### Step 5 — Check health endpoint
+
+```bash
+curl http://localhost:4000/api/health
+```
+
+You should see `"status":"ok"` with database and redis both `"connected"`.
+
+### Step 6 — Open in browser
+
+Open `http://your-server-ip` in your browser. You should see the landing page.
+
+> **⚠️ Login won't work yet** — you need to configure OAuth keys first. Continue to Step 7.
+
+### Step 7 — Configure OAuth & Pterodactyl
+
+```bash
+nano /opt/gamehost/.env
+```
+
+Find and update these lines with your actual values:
+
+```env
+# Your domain or IP
+APP_URL=https://yourdomain.com
+BACKEND_URL=https://yourdomain.com
+NEXT_PUBLIC_API_URL=https://yourdomain.com
+
+# Google OAuth — get from https://console.cloud.google.com/apis/credentials
+GOOGLE_CLIENT_ID=your-client-id-here
+GOOGLE_CLIENT_SECRET=your-client-secret-here
+GOOGLE_CALLBACK_URL=https://yourdomain.com/api/auth/google/callback
+
+# Discord OAuth — get from https://discord.com/developers/applications
+DISCORD_CLIENT_ID=your-client-id-here
+DISCORD_CLIENT_SECRET=your-client-secret-here
+DISCORD_CALLBACK_URL=https://yourdomain.com/api/auth/discord/callback
+
+# Pterodactyl Panel — your existing panel
+PTERODACTYL_URL=https://panel.yourdomain.com
+PTERODACTYL_APP_KEY=ptla_your-application-api-key
+PTERODACTYL_CLIENT_KEY=ptlc_your-client-api-key
+```
+
+Save the file (`Ctrl+X`, then `Y`, then `Enter`).
+
+### Step 8 — Restart to apply changes
+
+```bash
+cd /opt/gamehost
+docker compose down
+docker compose up -d
+```
+
+### Step 9 — Test login
+
+1. Open `https://yourdomain.com` in your browser
+2. Click **Login with Google** or **Login with Discord**
+3. You should be redirected to your dashboard
+
+### Step 10 — Make yourself admin
+
+After logging in for the first time, you need to promote your account to admin via the database:
+
+```bash
+cd /opt/gamehost
+
+# Open the database
+docker compose exec postgres psql -U gamehost -d gamehost
+
+# Find your user (lists all users)
+SELECT id, email, name, role FROM "User";
+
+# Copy YOUR email from the list, then run:
+UPDATE "User" SET role = 'ADMIN' WHERE email = 'your-email@gmail.com';
+
+# Verify it worked
+SELECT email, role FROM "User" WHERE email = 'your-email@gmail.com';
+
+# Exit database
+\q
+```
+
+Now when you refresh the website, you'll have access to the **Admin Dashboard** at `/admin`.
+
+### Step 11 — Create your first hosting plan
+
+1. Go to `/admin` on your website
+2. Click on **Plans** and create a new plan
+3. Set the name, resource limits (RAM, CPU, disk), pricing, and select which eggs (server types) are available
+4. Users can now create servers using this plan
+
+### 🎉 Done! Your hosting platform is live.
+
+---
+
+## 🔄 How to Update (When You Push New Code)
+
+### From your VPS (one command)
+
+```bash
+cd /opt/gamehost
+bash update.sh
+```
+
+This does everything safely:
+
+- ✅ Pulls latest code from Git (`git pull --rebase`)
+- ✅ Rebuilds all containers from scratch
+- ✅ Stops old containers → starts fresh ones
+- ✅ Waits for database to be ready
+- ✅ Runs any new database migrations
+- ✅ **Your `.env`, database data, and backups are NEVER touched**
+
+### Manual update (step by step)
+
+If you prefer to do it yourself:
+
+```bash
+cd /opt/gamehost
+
+# 1. Pull latest code
+git pull
+
+# 2. Rebuild containers
+docker compose build --no-cache
+
+# 3. Restart everything
+docker compose down
+docker compose up -d
+
+# 4. Run any new database migrations
+docker compose exec backend npx prisma migrate deploy
+```
+
+### Update workflow from your local machine
+
+If you're developing locally and want to deploy changes:
+
+```bash
+# On your LOCAL machine — push changes
+git add .
+git commit -m "your changes"
+git push
+
+# On your VPS — pull and update
+ssh root@your-server-ip
+cd /opt/gamehost
+bash update.sh
+```
+
+---
+
+## 💾 Backups
+
+### Create a backup now
+
+```bash
+cd /opt/gamehost
+bash backup.sh
+```
+
+Creates a compressed database dump at `./backups/gamehost_YYYYMMDD_HHMMSS.sql.gz`.  
+Auto-deletes backups older than 7 days.
+
+### Set up automatic daily backups
+
+```bash
+crontab -e
+```
+
+Add this line at the bottom:
+
+```
+0 3 * * * cd /opt/gamehost && bash backup.sh >> /var/log/gamehost-backup.log 2>&1
+```
+
+This runs a backup every day at 3 AM.
+
+### List your backups
+
+```bash
+ls -lh /opt/gamehost/backups/
+```
+
+### Restore from a backup
+
+```bash
+cd /opt/gamehost
+
+# Decompress the backup file
+gunzip -k ./backups/gamehost_20260301_030000.sql.gz
+
+# Restore into the database
+cat ./backups/gamehost_20260301_030000.sql | docker compose exec -T postgres psql -U gamehost -d gamehost
+
+# Restart backend
+docker compose restart backend
+```
+
+---
+
+## 🔒 SSL / HTTPS Setup
+
+### Option A — Let's Encrypt (Free SSL)
+
+```bash
+# 1. Install Certbot on your VPS
+sudo apt install certbot -y
+
+# 2. Stop Nginx so Certbot can use port 80
+cd /opt/gamehost
+docker compose stop nginx
+
+# 3. Get your certificate
+sudo certbot certonly --standalone -d yourdomain.com
+
+# 4. Copy certificate files to the project
+sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem ./nginx/ssl/fullchain.pem
+sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem ./nginx/ssl/privkey.pem
+
+# 5. Start Nginx again
+docker compose start nginx
+```
+
+Now edit `nginx/nginx.conf`:
+
+```bash
+nano nginx/nginx.conf
+```
+
+Uncomment these lines (remove the `#` at the start):
+
+```nginx
+listen 443 ssl http2;
+ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+ssl_protocols       TLSv1.2 TLSv1.3;
+ssl_ciphers         HIGH:!aNULL:!MD5;
+ssl_prefer_server_ciphers on;
+ssl_session_cache   shared:SSL:10m;
+ssl_session_timeout 10m;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+```
+
+Also uncomment the HTTP → HTTPS redirect block near the top of the file.
+
+Restart Nginx:
+
+```bash
+docker compose restart nginx
+```
+
+Set up auto-renewal so your certificate doesn't expire:
+
+```bash
+crontab -e
+```
+
+Add:
+
+```
+0 */12 * * * certbot renew --quiet --pre-hook "cd /opt/gamehost && docker compose stop nginx" --post-hook "cd /opt/gamehost && docker compose start nginx"
+```
+
+### Option B — Cloudflare (Easiest, no commands needed)
+
+1. Add your domain to [Cloudflare](https://dash.cloudflare.com/)
+2. Point your domain's DNS A record to your VPS IP
+3. Set SSL mode to **Full** or **Full (Strict)**
+4. Done — Cloudflare handles all SSL for you
+
+---
+
+## ⚙️ All Configuration Options
+
+Edit `.env` to configure. After any changes:
+
+```bash
+cd /opt/gamehost
+docker compose down
+docker compose up -d
+```
+
+### Required Settings
+
+| Variable | What It Is | Where to Get It |
+|----------|-----------|----------------|
+| `APP_URL` | Your website URL | Your domain, e.g. `https://yourdomain.com` |
+| `NEXT_PUBLIC_API_URL` | Same as APP_URL | Same as above |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth secret | Same as above |
+| `GOOGLE_CALLBACK_URL` | Google redirect URL | `https://yourdomain.com/api/auth/google/callback` |
+| `DISCORD_CLIENT_ID` | Discord OAuth client ID | [Discord Developer Portal](https://discord.com/developers/applications) |
+| `DISCORD_CLIENT_SECRET` | Discord OAuth secret | Same as above |
+| `DISCORD_CALLBACK_URL` | Discord redirect URL | `https://yourdomain.com/api/auth/discord/callback` |
+| `PTERODACTYL_URL` | Your Pterodactyl panel URL | Your panel URL, e.g. `https://panel.yourdomain.com` |
+| `PTERODACTYL_APP_KEY` | Pterodactyl Application API key | Panel → Admin → Application API |
+| `PTERODACTYL_CLIENT_KEY` | Pterodactyl Client API key | Panel → Account → API Credentials |
+
+### Optional Settings
 
 <details>
-<summary><b>💳 Razorpay</b></summary>
+<summary><b>💳 Razorpay Payments</b></summary>
 
 ```env
 RAZORPAY_ENABLED=true
@@ -123,12 +450,12 @@ RAZORPAY_KEY_ID=rzp_live_xxxxxxxxxx
 RAZORPAY_KEY_SECRET=your-secret
 RAZORPAY_WEBHOOK_SECRET=your-webhook-secret
 ```
-Webhook URL: `https://yourdomain.com/api/billing/razorpay/webhook`  
-Get keys: [Razorpay Dashboard](https://dashboard.razorpay.com/app/keys)
+Get keys: [Razorpay Dashboard](https://dashboard.razorpay.com/app/keys)  
+Set webhook URL in Razorpay dashboard: `https://yourdomain.com/api/billing/razorpay/webhook`
 </details>
 
 <details>
-<summary><b>💳 Cashfree</b></summary>
+<summary><b>💳 Cashfree Payments</b></summary>
 
 ```env
 CASHFREE_ENABLED=true
@@ -136,23 +463,24 @@ CASHFREE_APP_ID=your-app-id
 CASHFREE_SECRET_KEY=your-secret
 CASHFREE_ENV=production
 ```
-Webhook URL: `https://yourdomain.com/api/billing/cashfree/webhook`  
-Get keys: [Cashfree Dashboard](https://merchant.cashfree.com/)
+Get keys: [Cashfree Dashboard](https://merchant.cashfree.com/)  
+Set webhook URL in Cashfree dashboard: `https://yourdomain.com/api/billing/cashfree/webhook`
 </details>
 
 <details>
-<summary><b>💳 UPI Manual</b></summary>
+<summary><b>💳 UPI Manual Payments</b></summary>
+
+Users pay via UPI and submit the UTR number. You approve/reject from the admin panel.
 
 ```env
 UPI_ENABLED=true
 UPI_ID=yourname@upi
-UPI_QR_URL=https://example.com/qr.png
+UPI_QR_URL=https://example.com/your-qr-code.png
 ```
-Users submit UTR → admin approves/rejects from the admin panel.
 </details>
 
 <details>
-<summary><b>☁️ Datalix VPS</b></summary>
+<summary><b>☁️ Datalix VPS Reselling</b></summary>
 
 ```env
 DATALIX_ENABLED=true
@@ -162,41 +490,49 @@ DATALIX_API_URL=https://api.datalix.de/v1
 </details>
 
 <details>
-<summary><b>🤖 Discord Bot</b></summary>
+<summary><b>🤖 Discord Bot Notifications</b></summary>
+
+The bot automatically logs: new users, payments, server creation, UTR requests, and errors.
+
+1. Create a bot at [Discord Developer Portal](https://discord.com/developers/applications)
+2. Enable the **Guilds** intent
+3. Invite the bot to your server
+4. Right-click your log channel → Copy ID
 
 ```env
 DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_LOG_CHANNEL_ID=123456789012345678
 ```
-Create bot at [Discord Developer Portal](https://discord.com/developers/applications). Needs `Guilds` intent.
 </details>
 
 <details>
-<summary><b>🌐 Cloudflare DNS</b></summary>
+<summary><b>🌐 Cloudflare Auto-Subdomains</b></summary>
+
+Automatically creates subdomains for game servers (e.g. `myserver.play.gamehost.com`) with A + SRV records.
 
 ```env
 CLOUDFLARE_ENABLED=true
-CLOUDFLARE_API_TOKEN=your-token
+CLOUDFLARE_API_TOKEN=your-api-token
 CLOUDFLARE_ZONE_ID=your-zone-id
 CLOUDFLARE_BASE_DOMAIN=play.gamehost.com
 ```
-Creates `servername.play.gamehost.com` with A + SRV records automatically.
+Get API token: [Cloudflare Dashboard → API Tokens](https://dash.cloudflare.com/profile/api-tokens) (needs DNS Edit permission)
 </details>
 
 <details>
-<summary><b>🪙 Ads / Credits</b></summary>
+<summary><b>🪙 Credits / Ads System</b></summary>
 
 ```env
-FREE_CREDITS_TIMER_SECONDS=60
-FREE_CREDITS_REWARD=10
-FREE_SERVER_DELETE_DAYS=7
+FREE_CREDITS_TIMER_SECONDS=60     # seconds between earns
+FREE_CREDITS_REWARD=10             # credits per earn  
+FREE_SERVER_DELETE_DAYS=7          # delete suspended free servers after X days
 ADSENSE_PUBLISHER_ID=ca-pub-xxxxxxxxxx
 ADSTERRA_SCRIPT_URL=https://...
 ```
 </details>
 
 <details>
-<summary><b>🧾 Paymenter</b></summary>
+<summary><b>🧾 Paymenter Integration</b></summary>
 
 ```env
 PAYMENTER_ENABLED=true
@@ -207,53 +543,73 @@ PAYMENTER_API_KEY=your-key
 
 ---
 
-## 🗂️ Project Structure
+## 🛠️ Common Commands Cheatsheet
 
-```
-gamehost/
-├── backend/                 NestJS 10 + Prisma 5 + PostgreSQL
-│   ├── src/modules/         14 feature modules
-│   ├── prisma/schema.prisma 12 models, 8 enums
-│   └── Dockerfile           Multi-stage (Node 20 Alpine)
-├── frontend/                Next.js 14 + Tailwind + Three.js
-│   ├── src/app/             14 pages (landing, dashboard, admin)
-│   └── Dockerfile           Multi-stage (Node 20 Alpine)
-├── nginx/nginx.conf         Reverse proxy + rate limiting + security headers
-├── docker-compose.yml       5 services (postgres, redis, backend, frontend, nginx)
-├── install.sh               One-command setup
-├── update.sh                Safe updates (pulls, rebuilds, migrates)
-└── backup.sh                Database backup with auto-rotation
+Run these from your project directory (`cd /opt/gamehost`):
+
+```bash
+# --- Start / Stop / Restart ---
+docker compose up -d                              # start all
+docker compose down                                # stop all
+docker compose down && docker compose up -d        # restart all
+docker compose restart backend                     # restart one service
+
+# --- View Status ---
+docker compose ps                                  # container status
+docker stats                                       # live CPU/memory usage
+
+# --- View Logs ---
+docker compose logs -f                             # all logs (live)
+docker compose logs -f backend                     # backend logs only
+docker compose logs --tail=100 backend             # last 100 lines
+
+# --- Database ---
+docker compose exec postgres psql -U gamehost -d gamehost   # open DB shell
+docker compose exec backend npx prisma migrate deploy       # run migrations
+docker compose exec backend npx prisma migrate status       # check migration status
+
+# --- Rebuild After Code Changes ---
+docker compose build --no-cache                    # rebuild all containers
+docker compose down && docker compose up -d        # restart
+
+# --- Shell Access ---
+docker compose exec backend sh                     # backend shell
+docker compose exec frontend sh                    # frontend shell
+
+# --- Disk Space ---
+docker system df                                   # docker disk usage
+docker system prune -f                             # clean unused docker data
 ```
 
 ---
 
 ## 🖥️ Frontend Pages
 
-| Route | Page |
-|-------|------|
-| `/` | Landing page (Three.js 3D scene) |
-| `/login` | Google + Discord OAuth |
-| `/dashboard` | User dashboard |
-| `/dashboard/servers` | Server list |
-| `/dashboard/servers/create` | Create server |
-| `/dashboard/servers/[id]` | Server detail (console, files, plugins, players, backups) |
-| `/dashboard/plans` | Browse plans |
-| `/dashboard/billing` | Payment history |
-| `/dashboard/balance` | Wallet top-up |
-| `/dashboard/credits` | Earn credits via ads |
-| `/dashboard/profile` | Profile settings |
-| `/dashboard/vps` | VPS management |
-| `/dashboard/support` | Support |
-| `/admin` | Admin dashboard 🔒 |
+| Route | Page | Login Required |
+|-------|------|:-:|
+| `/` | Landing page (3D Three.js scene) | No |
+| `/login` | Google + Discord OAuth login | No |
+| `/dashboard` | User dashboard | Yes |
+| `/dashboard/servers` | Your servers list | Yes |
+| `/dashboard/servers/create` | Create new server | Yes |
+| `/dashboard/servers/[id]` | Server detail — console, files, plugins, players, backups | Yes |
+| `/dashboard/plans` | Browse hosting plans | Yes |
+| `/dashboard/billing` | Payment history | Yes |
+| `/dashboard/balance` | Wallet top-up | Yes |
+| `/dashboard/credits` | Earn credits via ads | Yes |
+| `/dashboard/profile` | Profile settings | Yes |
+| `/dashboard/vps` | VPS management | Yes |
+| `/dashboard/support` | Support page | Yes |
+| `/admin` | Admin dashboard | Yes (Admin only) |
 
 ---
 
 ## 🔌 API Reference
 
-All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or `Authorization: Bearer` header).
+All routes prefixed with `/api`. Auth = JWT via cookie or `Authorization: Bearer` header.
 
 <details>
-<summary><b>Auth</b> — <code>/api/auth</code></summary>
+<summary><b>Auth</b> — 6 routes</summary>
 
 | Method | Route | Auth | Description |
 |--------|-------|:----:|-------------|
@@ -261,49 +617,51 @@ All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or 
 | GET | `/auth/google/callback` | — | Google callback |
 | GET | `/auth/discord` | — | Redirect to Discord OAuth |
 | GET | `/auth/discord/callback` | — | Discord callback |
-| GET | `/auth/me` | ✅ | Current user info |
+| GET | `/auth/me` | ✅ | Get current user |
 | GET | `/auth/logout` | — | Clear session |
 </details>
 
 <details>
-<summary><b>Servers</b> — <code>/api/servers</code> — 18 endpoints</summary>
+<summary><b>Servers</b> — 18 routes</summary>
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/servers` | List user's servers (with live status) |
-| GET | `/servers/:id` | Server details + resources |
-| POST | `/servers` | Provision new server |
-| POST | `/servers/:id/power` | Power action (start/stop/restart/kill) |
+| GET | `/servers` | List your servers (with live status) |
+| GET | `/servers/:id` | Server details |
+| POST | `/servers` | Create server |
+| POST | `/servers/:id/power` | Power (start/stop/restart/kill) |
 | GET | `/servers/:id/console` | WebSocket credentials |
 | POST | `/servers/:id/command` | Send console command |
 | GET | `/servers/:id/files?dir=/` | List files |
 | GET | `/servers/:id/files/contents?file=` | Read file |
 | POST | `/servers/:id/files/write` | Write file |
 | POST | `/servers/:id/files/delete` | Delete files |
-| GET | `/servers/:id/files/upload` | Get upload URL |
+| GET | `/servers/:id/files/upload` | Upload URL |
 | GET | `/servers/:id/backups` | List backups |
 | POST | `/servers/:id/backups` | Create backup |
 | GET | `/servers/:id/databases` | List databases |
 | POST | `/servers/:id/databases` | Create database |
 | GET | `/servers/:id/network` | Network allocations |
 | GET | `/servers/:id/startup` | Startup variables |
-| POST | `/servers/:id/startup` | Update startup variable |
+| POST | `/servers/:id/startup` | Update startup var |
+
+All routes require auth ✅
 </details>
 
 <details>
-<summary><b>Plans</b> — <code>/api/plans</code></summary>
+<summary><b>Plans</b> — 5 routes</summary>
 
 | Method | Route | Auth | Description |
 |--------|-------|:----:|-------------|
-| GET | `/plans` | — | List active plans |
-| GET | `/plans/eggs` | ✅ | Available eggs |
-| GET | `/plans/nodes` | ✅ | Available nodes |
+| GET | `/plans` | — | List plans |
+| GET | `/plans/eggs` | ✅ | Pterodactyl eggs |
+| GET | `/plans/nodes` | ✅ | Pterodactyl nodes |
 | GET | `/plans/:id` | — | Plan details |
-| POST | `/plans/calculate` | ✅ | Calculate custom price |
+| POST | `/plans/calculate` | ✅ | Custom price calc |
 </details>
 
 <details>
-<summary><b>Billing</b> — <code>/api/billing</code> — 11 endpoints</summary>
+<summary><b>Billing</b> — 12 routes</summary>
 
 | Method | Route | Auth | Description |
 |--------|-------|:----:|-------------|
@@ -318,26 +676,26 @@ All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or 
 | POST | `/billing/cashfree/create` | ✅ | Create Cashfree order |
 | POST | `/billing/cashfree/verify` | — | Verify Cashfree |
 | POST | `/billing/cashfree/webhook` | — | Cashfree webhook |
-| POST | `/billing/upi/submit` | ✅ | Submit UPI payment |
+| POST | `/billing/upi/submit` | ✅ | Submit UPI (UTR) |
 </details>
 
 <details>
-<summary><b>Credits</b> — <code>/api/credits</code></summary>
+<summary><b>Credits</b> — 3 routes</summary>
 
 | Method | Route | Auth | Description |
 |--------|-------|:----:|-------------|
 | GET | `/credits` | ✅ | Credit balance |
-| GET | `/credits/config` | — | Earn config (timer, reward) |
-| POST | `/credits/earn` | ✅ | Earn credits (2/min rate limit) |
+| GET | `/credits/config` | — | Earn config |
+| POST | `/credits/earn` | ✅ | Earn credits (2/min limit) |
 </details>
 
 <details>
-<summary><b>Plugins</b> — <code>/api/plugins</code> — 10 endpoints</summary>
+<summary><b>Plugins</b> — 10 routes</summary>
 
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/plugins/:uuid/detect` | Detect server software |
-| GET | `/plugins/:uuid/installed` | List installed plugins |
+| GET | `/plugins/:uuid/installed` | Installed plugins |
 | DELETE | `/plugins/:uuid/remove/:file` | Remove plugin |
 | GET | `/plugins/modrinth/search` | Search Modrinth |
 | GET | `/plugins/modrinth/project/:id` | Modrinth project |
@@ -346,42 +704,48 @@ All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or 
 | GET | `/plugins/spiget/search` | Search SpigotMC |
 | GET | `/plugins/spiget/resource/:id` | Spiget resource |
 | POST | `/plugins/:uuid/spiget/install` | Install from SpigotMC |
+
+All routes require auth ✅
 </details>
 
 <details>
-<summary><b>Players</b> — <code>/api/players</code> — 12 endpoints</summary>
+<summary><b>Players</b> — 12 routes</summary>
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/players/:uuid/detect` | Is Minecraft server? |
+| GET | `/players/:uuid/detect` | Is Minecraft? |
 | GET | `/players/:uuid/online` | Online players |
 | GET | `/players/:uuid/whitelist` | Whitelist |
 | POST | `/players/:uuid/whitelist` | Add to whitelist |
 | DELETE | `/players/:uuid/whitelist/:player` | Remove from whitelist |
 | GET | `/players/:uuid/banned` | Banned players |
-| POST | `/players/:uuid/ban` | Ban player |
-| POST | `/players/:uuid/unban` | Unban player |
+| POST | `/players/:uuid/ban` | Ban |
+| POST | `/players/:uuid/unban` | Unban |
 | GET | `/players/:uuid/ops` | Operators |
-| POST | `/players/:uuid/op` | Op player |
-| POST | `/players/:uuid/deop` | Deop player |
-| POST | `/players/:uuid/kick` | Kick player |
+| POST | `/players/:uuid/op` | Op |
+| POST | `/players/:uuid/deop` | Deop |
+| POST | `/players/:uuid/kick` | Kick |
+
+All routes require auth ✅
 </details>
 
 <details>
-<summary><b>VPS</b> — <code>/api/vps</code></summary>
+<summary><b>VPS</b> — 6 routes</summary>
 
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/vps/plans` | List VPS plans |
-| GET | `/vps` | User's VPS instances |
+| GET | `/vps` | Your VPS instances |
 | POST | `/vps` | Provision VPS |
 | GET | `/vps/:id` | VPS status |
 | POST | `/vps/:id/control` | Control (start/stop/restart) |
 | DELETE | `/vps/:id` | Terminate |
+
+All routes require auth ✅
 </details>
 
 <details>
-<summary><b>Admin</b> — <code>/api/admin</code> 🔒 — 19 endpoints</summary>
+<summary><b>Admin</b> — 19 routes 🔒</summary>
 
 | Method | Route | Description |
 |--------|-------|-------------|
@@ -390,7 +754,7 @@ All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or 
 | GET | `/admin/users/:id` | User details |
 | PATCH | `/admin/users/:id/role` | Set role (USER/ADMIN) |
 | DELETE | `/admin/users/:id` | Delete user |
-| GET | `/admin/servers` | List all servers |
+| GET | `/admin/servers` | All servers (paginated) |
 | POST | `/admin/servers/:id/suspend` | Suspend server |
 | POST | `/admin/servers/:id/unsuspend` | Unsuspend server |
 | POST | `/admin/plans` | Create plan |
@@ -404,168 +768,53 @@ All endpoints are prefixed with `/api`. Protected routes require JWT (cookie or 
 | GET | `/admin/audit` | Audit logs (paginated) |
 | GET | `/admin/nodes` | Pterodactyl nodes |
 | GET | `/admin/eggs` | Pterodactyl eggs |
+
+Requires ADMIN role
 </details>
 
 <details>
-<summary><b>Health</b> — <code>/api/health</code></summary>
+<summary><b>Health</b> — 1 route</summary>
 
 ```bash
 curl http://localhost:4000/api/health
 ```
-Returns: status (`ok` / `degraded`), database + Redis connectivity, uptime, memory usage, Node.js version.
+Returns: status, DB/Redis connectivity, uptime, memory, Node version. No auth needed.
 </details>
 
 ---
 
-## 🛠️ Commands
+## ⏰ Background Jobs (Automatic)
 
-```bash
-# Start / Stop / Restart
-docker compose up -d
-docker compose down
-docker compose down && docker compose up -d
+No setup needed — these run automatically when the backend starts.
 
-# Logs
-docker compose logs -f              # all services
-docker compose logs -f backend      # specific service
-docker compose logs --tail=100 backend
-
-# Status
-docker compose ps
-docker stats
-
-# Database
-docker compose exec postgres psql -U gamehost -d gamehost
-docker compose exec backend npx prisma migrate deploy
-docker compose exec backend npx prisma migrate status
-
-# Shell access
-docker compose exec backend sh
-
-# Rebuild
-docker compose build --no-cache
-docker compose down && docker compose up -d
-```
+| Every | What Happens |
+|-------|-------------|
+| 1 hour | Suspends expired servers |
+| 1 hour | Deletes servers suspended for 48+ hours |
+| 1 hour | Flags servers expiring within 7 days for renewal notification |
+| 30 min | Suspends free servers when user has 0 credits |
+| 30 min | Deletes free servers suspended longer than `FREE_SERVER_DELETE_DAYS` |
 
 ---
 
-## 🔄 Update
+## 🗂️ Project Structure
 
-```bash
-bash update.sh
 ```
-
-Pulls latest code → rebuilds containers → restarts services → runs migrations. **Safe** — never touches `.env`, database, or backups.
-
-<details>
-<summary>Manual update steps</summary>
-
-```bash
-git pull
-docker compose build --no-cache
-docker compose down && docker compose up -d
-docker compose exec backend npx prisma migrate deploy
+gamehost/
+├── backend/                 NestJS 10 + Prisma 5
+│   ├── src/modules/         14 feature modules (auth, servers, plans, billing, etc.)
+│   ├── src/common/          Guards, decorators, filters, health check
+│   ├── prisma/schema.prisma Database schema (12 models, 8 enums)
+│   └── Dockerfile           Multi-stage build (Node 20 Alpine)
+├── frontend/                Next.js 14 + Tailwind + Three.js + Framer Motion
+│   ├── src/app/             14 pages
+│   └── Dockerfile           Multi-stage build (Node 20 Alpine)
+├── nginx/nginx.conf         Reverse proxy, rate limiting, security headers, SSL-ready
+├── docker-compose.yml       5 services: postgres, redis, backend, frontend, nginx
+├── install.sh               First-time setup
+├── update.sh                Safe update (pull + rebuild + migrate)
+└── backup.sh                Database backup with 7-day rotation
 ```
-</details>
-
----
-
-## 💾 Backups
-
-```bash
-bash backup.sh                        # backup now
-ls -lh ./backups/                      # list backups
-```
-
-Auto-rotates backups older than 7 days. Output: `./backups/gamehost_YYYYMMDD_HHMMSS.sql.gz`
-
-<details>
-<summary>Automatic daily backups (cron)</summary>
-
-```bash
-crontab -e
-# Add:
-0 3 * * * cd /path/to/gamehost && bash backup.sh >> /var/log/gamehost-backup.log 2>&1
-```
-</details>
-
-<details>
-<summary>Restore from backup</summary>
-
-```bash
-gunzip -k ./backups/gamehost_20260301_030000.sql.gz
-cat ./backups/gamehost_20260301_030000.sql | docker compose exec -T postgres psql -U gamehost -d gamehost
-docker compose restart backend
-```
-</details>
-
----
-
-## 🔒 SSL Setup
-
-<details>
-<summary><b>Option A — Let's Encrypt (Certbot)</b></summary>
-
-```bash
-sudo apt install certbot -y
-docker compose stop nginx
-sudo certbot certonly --standalone -d yourdomain.com
-sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem ./nginx/ssl/
-sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem ./nginx/ssl/
-docker compose start nginx
-```
-
-Then uncomment the SSL lines in `nginx/nginx.conf` and restart:
-
-```bash
-docker compose restart nginx
-```
-
-Auto-renew:
-```bash
-crontab -e
-# Add:
-0 */12 * * * certbot renew --quiet --pre-hook "cd /path/to/gamehost && docker compose stop nginx" --post-hook "cd /path/to/gamehost && docker compose start nginx"
-```
-</details>
-
-<details>
-<summary><b>Option B — Cloudflare (easiest)</b></summary>
-
-1. Point DNS to your server IP in Cloudflare
-2. Set SSL mode to **Full** or **Full (Strict)**
-3. Done — no certificates needed on your server
-</details>
-
----
-
-## ⏰ Background Jobs
-
-These run automatically — no setup needed.
-
-| Schedule | Action |
-|----------|--------|
-| Every hour | Suspend expired servers |
-| Every hour | Delete servers suspended 48h+ |
-| Every hour | Flag servers expiring within 7 days |
-| Every 30 min | Suspend free servers at 0 credits |
-| Every 30 min | Delete free servers suspended > `FREE_SERVER_DELETE_DAYS` |
-
----
-
-## 🗄️ Database
-
-PostgreSQL 16 with Prisma ORM — 12 models, 8 enums.
-
-<details>
-<summary>View schema details</summary>
-
-**Models:** User, PterodactylAccount, Server, Plan, Payment, Balance, Credit, CreditEarn, UpiPayment, Vps, AdminSetting, AuditLog
-
-**Enums:** Role (USER/ADMIN), AuthProvider (GOOGLE/DISCORD), ServerStatus (ACTIVE/SUSPENDED/EXPIRED/DELETED/INSTALLING), PlanType (FREE/PREMIUM/CUSTOM), NodeAssignMode (ADMIN_LOCKED/USER_SELECTABLE/DYNAMIC), PaymentGateway (RAZORPAY/CASHFREE/UPI/BALANCE), PaymentStatus (PENDING/COMPLETED/FAILED/REFUNDED), UpiStatus (PENDING/APPROVED/REJECTED), VpsStatus (ACTIVE/SUSPENDED/TERMINATED/PROVISIONING)
-
-Full schema: [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma)
-</details>
 
 ---
 
@@ -575,8 +824,9 @@ Full schema: [`backend/prisma/schema.prisma`](backend/prisma/schema.prisma)
 <summary><b>Container won't start</b></summary>
 
 ```bash
-docker compose ps
-docker compose logs backend
+docker compose ps                    # see which failed
+docker compose logs backend          # check error
+docker compose logs postgres         # check database
 ```
 </details>
 
@@ -584,45 +834,63 @@ docker compose logs backend
 <summary><b>Port already in use</b></summary>
 
 ```bash
-sudo lsof -i :3000
-sudo kill -9 <PID>
-# Or change in .env: FRONTEND_PORT=3001
+sudo lsof -i :3000                   # find what's using it
+sudo kill -9 <PID>                   # kill it
+# Or change port in .env: FRONTEND_PORT=3001
 ```
 </details>
 
 <details>
-<summary><b>Database connection errors</b></summary>
+<summary><b>Database won't connect</b></summary>
 
 ```bash
-docker compose exec postgres pg_isready -U gamehost
-docker compose restart postgres && sleep 5 && docker compose restart backend
+docker compose exec postgres pg_isready -U gamehost    # check if DB is up
+docker compose restart postgres                        # restart it
+sleep 5
+docker compose restart backend                         # restart backend
 ```
 </details>
 
 <details>
-<summary><b>Migration failed</b></summary>
+<summary><b>Migrations failed</b></summary>
 
 ```bash
-docker compose exec backend npx prisma migrate status
-docker compose exec backend npx prisma migrate deploy
-# Nuclear: docker compose exec backend npx prisma migrate reset --force
+docker compose exec backend npx prisma migrate status   # check status
+docker compose exec backend npx prisma migrate deploy    # retry
+
+# Last resort — resets ALL data:
+docker compose exec backend npx prisma migrate reset --force
 ```
 </details>
 
 <details>
-<summary><b>OAuth login fails</b></summary>
+<summary><b>OAuth login keeps failing</b></summary>
 
-1. Verify callback URLs in `.env` match Google/Discord settings exactly
-2. Ensure `APP_URL` matches your domain  
+1. Make sure callback URLs in `.env` match **exactly** what you set in Google/Discord
+2. Make sure `APP_URL` is your actual domain (with https if using SSL)
 3. Check logs: `docker compose logs -f backend`
 </details>
 
 <details>
-<summary><b>Full reset (⚠️ deletes all data)</b></summary>
+<summary><b>Can't access admin panel</b></summary>
+
+You need ADMIN role. Run this:
 
 ```bash
-docker compose down -v
-bash install.sh
+docker compose exec postgres psql -U gamehost -d gamehost
+UPDATE "User" SET role = 'ADMIN' WHERE email = 'your-email@gmail.com';
+\q
+```
+
+Refresh the website.
+</details>
+
+<details>
+<summary><b>Full reset (⚠️ deletes everything)</b></summary>
+
+```bash
+docker compose down -v               # remove containers + database volumes
+bash install.sh                      # fresh install
 ```
 </details>
 
@@ -632,10 +900,10 @@ bash install.sh
 
 | Layer | Protection |
 |-------|-----------|
-| Auth | OAuth-only (zero passwords stored) |
-| Tokens | httpOnly + secure + SameSite cookies, 7-day expiry |
+| Auth | OAuth-only — zero passwords stored |
+| Tokens | httpOnly + secure + SameSite cookies (7-day expiry) |
 | Backend | Helmet, CORS (single origin), class-validator (whitelist mode) |
-| Rate Limiting | NestJS: 100 req/60s · Nginx: 30 req/s API, 5 req/min auth |
+| Rate Limiting | NestJS: 100 req/60s global · Nginx: 30 req/s API, 5 req/min auth |
 | Access Control | Role-based guards (USER / ADMIN) |
 | Headers | X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy |
 | Proxy | Nginx with gzip, WebSocket support, SSL-ready with HSTS |
