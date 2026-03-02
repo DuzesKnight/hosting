@@ -86,6 +86,7 @@ const plans = [
     { name: 'Starter', price: 'Free', ram: '1 GB', cpu: '50%', disk: '5 GB', color: 'from-green-500 to-emerald-500' },
     { name: 'Standard', price: '₹149/mo', ram: '4 GB', cpu: '200%', disk: '20 GB', color: 'from-primary to-blue-500' },
     { name: 'Premium', price: '₹499/mo', ram: '8 GB', cpu: '400%', disk: '50 GB', color: 'from-accent to-purple-500' },
+    { name: 'Ultimate', price: '₹999/mo', ram: '16 GB', cpu: '800%', disk: '100 GB', color: 'from-orange-500 to-red-500' },
 ];
 
 // ---------- Main Page ----------
@@ -190,7 +191,7 @@ export default function LandingPage() {
                         <p className="text-gray-400">Start free. Scale when you&apos;re ready.</p>
                     </motion.div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
                         {plans.map((plan, i) => (
                             <motion.div
                                 key={plan.name}
@@ -198,10 +199,10 @@ export default function LandingPage() {
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
                                 transition={{ delay: i * 0.15 }}
-                                className={`glass-card p-8 relative ${i === 1 ? 'ring-2 ring-primary/50 scale-105' : ''}`}
+                                className={`glass-card p-8 relative ${i === 2 ? 'ring-2 ring-primary/50 scale-105' : ''}`}
                             >
-                                {i === 1 && (
-                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-gradient-to-r from-primary to-blue-500 text-white text-xs font-bold rounded-full">
+                                {i === 2 && (
+                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-gradient-to-r from-accent to-purple-500 text-white text-xs font-bold rounded-full">
                                         POPULAR
                                     </div>
                                 )}
@@ -216,7 +217,7 @@ export default function LandingPage() {
                                     <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> Plugin Installer</li>
                                     <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> DDoS Protection</li>
                                 </ul>
-                                <Link href="/login" className={i === 1 ? 'btn-primary w-full text-center block' : 'btn-secondary w-full text-center block'}>
+                                <Link href="/login" className={i === 2 ? 'btn-primary w-full text-center block' : 'btn-secondary w-full text-center block'}>
                                     Get Started
                                 </Link>
                             </motion.div>

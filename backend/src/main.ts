@@ -43,7 +43,7 @@ async function bootstrap() {
     app.enableShutdownHooks();
 
     const port = config.get('BACKEND_PORT', 4000);
-    await app.listen(port);
+    await app.listen(port, '0.0.0.0');
 
     logger.log(`✓ API server running on port ${port}`);
     logger.log(`✓ Environment: ${config.get('NODE_ENV', 'development')}`);

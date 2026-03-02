@@ -37,7 +37,7 @@ export default function PlansPage() {
             </div>
 
             {/* Plans Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 {plans.filter((p) => p.type !== 'CUSTOM').map((plan, i) => (
                     <div key={plan.id} className="glass-card-hover p-6 flex flex-col">
                         <h3 className="text-xl font-display font-bold mb-1">{plan.name}</h3>
