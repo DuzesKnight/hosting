@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+// Use empty string = relative URLs (go through Nginx on same origin)
+// Override with NEXT_PUBLIC_API_URL only if you need a different backend host
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export const api = axios.create({
     baseURL: `${API_URL}/api`,

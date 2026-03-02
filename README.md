@@ -89,12 +89,12 @@ ssh root@your-server-ip
 ### Step 2 — Clone the project
 
 ```bash
-cd /opt
+cd /
 git clone https://github.com/your-org/gamehost.git
 cd gamehost
 ```
 
-> `/opt/gamehost` is the recommended location. You can use any directory.
+> `/gamehost` is the recommended location. You can use any directory.
 
 ### Step 3 — Run the installer
 
@@ -158,7 +158,7 @@ Open `http://your-server-ip` in your browser. You should see the landing page.
 ### Step 7 — Configure OAuth & Pterodactyl
 
 ```bash
-nano /opt/gamehost/.env
+nano /gamehost/.env
 ```
 
 Find and update these lines with your actual values:
@@ -167,7 +167,8 @@ Find and update these lines with your actual values:
 # Your domain or IP
 APP_URL=https://yourdomain.com
 BACKEND_URL=https://yourdomain.com
-NEXT_PUBLIC_API_URL=https://yourdomain.com
+# Leave NEXT_PUBLIC_API_URL empty — Nginx handles routing
+NEXT_PUBLIC_API_URL=
 
 # Google OAuth — get from https://console.cloud.google.com/apis/credentials
 GOOGLE_CLIENT_ID=your-client-id-here
@@ -190,7 +191,7 @@ Save the file (`Ctrl+X`, then `Y`, then `Enter`).
 ### Step 8 — Restart to apply changes
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose down
 docker compose up -d
 ```
@@ -206,7 +207,7 @@ docker compose up -d
 After logging in for the first time, you need to promote your account to admin via the database:
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 
 # Open the database
 docker compose exec postgres psql -U gamehost -d gamehost
@@ -237,6 +238,67 @@ Now when you refresh the website, you'll have access to the **Admin Dashboard** 
 
 ---
 
+## ❓ Troubleshooting
+
+### "Refused to connect" when clicking Login
+
+**Why it happens:**
+
+When you click "Login with Google", your browser is redirected to Google for authentication. After you log in, Google sends your browser back to the `GOOGLE_CALLBACK_URL` from your `.env` file. If this URL still says `http://localhost:4000/...`, your browser tries to connect to `localhost` — which is your own computer, not the VPS. Your computer has nothing running on port 4000, so it says "refused to connect".
+
+```
+  You click Login ──► Google ──► Google sends you back to CALLBACK_URL
+                                         │
+              If CALLBACK_URL = localhost ──► Your computer ──► ❌ Refused
+              If CALLBACK_URL = yourdomain ──► Your VPS ──► ✅ Works
+```
+
+**How to fix:**
+
+1. Open your `.env`:
+
+```bash
+nano /gamehost/.env
+```
+
+2. Update ALL three URL-related settings to your actual domain:
+
+```env
+APP_URL=https://yourdomain.com
+
+GOOGLE_CALLBACK_URL=https://yourdomain.com/api/auth/google/callback
+DISCORD_CALLBACK_URL=https://yourdomain.com/api/auth/discord/callback
+```
+
+3. **Also update Google Cloud Console:**
+
+   - Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials)
+   - Click your OAuth 2.0 Client
+   - Under **Authorized redirect URIs**, add: `https://yourdomain.com/api/auth/google/callback`
+   - Remove the old `http://localhost:4000/...` entry
+   - Click **Save**
+
+4. Rebuild and restart:
+
+```bash
+cd /gamehost
+docker compose down && docker compose up -d --build
+```
+
+> **Note:** `NEXT_PUBLIC_API_URL` should be left **empty** in your `.env` — the frontend uses relative URLs that go through Nginx automatically. You do NOT need to set it to your domain.
+
+### Backend returns 404 on `/`
+
+This is normal. The backend API lives under `/api/`. Use these URLs:
+
+| What | URL |
+|------|-----|
+| Root (info) | `http://your-ip/` or `http://your-ip:4000/` |
+| Health check | `http://your-ip/api/health` |
+| Login | `http://your-ip/api/auth/google` |
+
+---
+
 ## 🔁 Auto-Restart on VPS Reboot
 
 All containers are configured with `restart: unless-stopped` in `docker-compose.yml`. This means:
@@ -256,7 +318,7 @@ docker inspect gamehost-backend --format '{{.HostConfig.RestartPolicy.Name}}'
 **If you want containers to start even after `docker compose down`**, change the policy to `always`:
 
 ```bash
-nano /opt/gamehost/docker-compose.yml
+nano /gamehost/docker-compose.yml
 # Change "restart: unless-stopped" to "restart: always" for each service
 ```
 
@@ -268,7 +330,7 @@ sudo reboot
 
 # After reconnecting via SSH, check containers are running
 ssh root@your-server-ip
-docker compose -f /opt/gamehost/docker-compose.yml ps
+docker compose -f /gamehost/docker-compose.yml ps
 ```
 
 ---
@@ -278,7 +340,7 @@ docker compose -f /opt/gamehost/docker-compose.yml ps
 ### From your VPS (one command)
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 bash update.sh
 ```
 
@@ -296,7 +358,7 @@ This does everything safely:
 If you prefer to do it yourself:
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 
 # 1. Pull latest code
 git pull
@@ -324,7 +386,7 @@ git push
 
 # On your VPS — pull and update
 ssh root@your-server-ip
-cd /opt/gamehost
+cd /gamehost
 bash update.sh
 ```
 
@@ -335,7 +397,7 @@ bash update.sh
 ### Create a backup now
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 bash backup.sh
 ```
 
@@ -351,7 +413,7 @@ crontab -e
 Add this line at the bottom:
 
 ```
-0 3 * * * cd /opt/gamehost && bash backup.sh >> /var/log/gamehost-backup.log 2>&1
+0 3 * * * cd /gamehost && bash backup.sh >> /var/log/gamehost-backup.log 2>&1
 ```
 
 This runs a backup every day at 3 AM.
@@ -359,13 +421,13 @@ This runs a backup every day at 3 AM.
 ### List your backups
 
 ```bash
-ls -lh /opt/gamehost/backups/
+ls -lh /gamehost/backups/
 ```
 
 ### Restore from a backup
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 
 # Decompress the backup file
 gunzip -k ./backups/gamehost_20260301_030000.sql.gz
@@ -388,7 +450,7 @@ docker compose restart backend
 sudo apt install certbot -y
 
 # 2. Stop Nginx so Certbot can use port 80
-cd /opt/gamehost
+cd /gamehost
 docker compose stop nginx
 
 # 3. Get your certificate
@@ -439,7 +501,7 @@ crontab -e
 Add:
 
 ```
-0 */12 * * * certbot renew --quiet --pre-hook "cd /opt/gamehost && docker compose stop nginx" --post-hook "cd /opt/gamehost && docker compose start nginx"
+0 */12 * * * certbot renew --quiet --pre-hook "cd /gamehost && docker compose stop nginx" --post-hook "cd /gamehost && docker compose start nginx"
 ```
 
 ### Option B — Cloudflare (Easiest, no commands needed)
@@ -456,7 +518,7 @@ Add:
 Edit `.env` to configure. After any changes:
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose down
 docker compose up -d
 ```
@@ -466,7 +528,7 @@ docker compose up -d
 | Variable | What It Is | Where to Get It |
 |----------|-----------|----------------|
 | `APP_URL` | Your website URL | Your domain, e.g. `https://yourdomain.com` |
-| `NEXT_PUBLIC_API_URL` | Same as APP_URL | Same as above |
+| `NEXT_PUBLIC_API_URL` | Leave **empty** (Nginx handles it) | Don't set this unless your backend runs on a different host |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth secret | Same as above |
 | `GOOGLE_CALLBACK_URL` | Google redirect URL | `https://yourdomain.com/api/auth/google/callback` |
@@ -584,12 +646,12 @@ PAYMENTER_API_KEY=your-key
 ## 🛠️ Managing Your Server (Stop, Start, Restart, Rebuild)
 
 > **All commands below must be run from your project directory.**  
-> Always start with: `cd /opt/gamehost`
+> Always start with: `cd /gamehost`
 
 ### 🛑 Stop the Entire Website
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose down
 ```
 
@@ -599,7 +661,7 @@ Your database data and `.env` file are **NOT deleted**.
 ### ▶️ Start the Website
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose up -d
 ```
 
@@ -608,7 +670,7 @@ The `-d` flag runs everything in the background. All 5 containers will start.
 ### 🔄 Restart Everything
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose down && docker compose up -d
 ```
 
@@ -617,7 +679,7 @@ This is the safest way to restart — stops everything, then starts fresh.
 ### 🔄 Restart a Single Service
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose restart backend      # restart only the backend
 docker compose restart frontend     # restart only the frontend
 docker compose restart nginx        # restart only nginx
@@ -630,7 +692,7 @@ docker compose restart redis        # restart only redis
 If you changed any code and need to rebuild the containers:
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose build --no-cache
 docker compose down && docker compose up -d
 ```
@@ -638,14 +700,14 @@ docker compose down && docker compose up -d
 Or rebuild and restart in one command:
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose down && docker compose up -d --build
 ```
 
 ### 🔨 Rebuild Only One Service
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose build --no-cache backend     # rebuild backend only
 docker compose build --no-cache frontend    # rebuild frontend only
 docker compose up -d                        # restart with new build
@@ -654,7 +716,7 @@ docker compose up -d                        # restart with new build
 ### 📊 Check What's Running
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose ps                   # show all containers and their status
 docker stats                        # live CPU and memory usage (Ctrl+C to exit)
 ```
@@ -662,7 +724,7 @@ docker stats                        # live CPU and memory usage (Ctrl+C to exit)
 ### 📋 View Logs
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose logs -f                       # all logs, live (Ctrl+C to exit)
 docker compose logs -f backend               # backend logs only
 docker compose logs -f frontend              # frontend logs only
@@ -683,7 +745,7 @@ curl -I http://localhost
 ### 🗃️ Database Commands
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 
 # Open the database shell
 docker compose exec postgres psql -U gamehost -d gamehost
@@ -698,7 +760,7 @@ docker compose exec backend npx prisma migrate status
 ### 🐚 Shell Access (Advanced)
 
 ```bash
-cd /opt/gamehost
+cd /gamehost
 docker compose exec backend sh      # open shell inside backend container
 docker compose exec frontend sh     # open shell inside frontend container
 docker compose exec postgres sh     # open shell inside database container

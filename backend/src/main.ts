@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
@@ -69,7 +69,9 @@ async function bootstrap() {
     logDone('NestJS application created');
 
     // ─── Global Prefix ───────────────────────────────────
-    app.setGlobalPrefix('api');
+    app.setGlobalPrefix('api', {
+        exclude: [{ path: '/', method: RequestMethod.GET }],
+    });
     logDone('Global prefix', '/api');
 
     // ─── Security ────────────────────────────────────────
