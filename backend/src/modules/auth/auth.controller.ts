@@ -28,7 +28,7 @@ export class AuthController {
             this.setTokenCookie(res, token);
             res.redirect(this.config.get('APP_URL', 'http://localhost:3000') + '/dashboard');
         } catch (error) {
-            res.redirect(this.config.get('APP_URL') + '/login?error=oauth_failed');
+            res.redirect(this.config.get('APP_URL', 'http://localhost:3000') + '/login?error=oauth_failed');
         }
     }
 
@@ -46,7 +46,7 @@ export class AuthController {
             this.setTokenCookie(res, token);
             res.redirect(this.config.get('APP_URL', 'http://localhost:3000') + '/dashboard');
         } catch (error) {
-            res.redirect(this.config.get('APP_URL') + '/login?error=oauth_failed');
+            res.redirect(this.config.get('APP_URL', 'http://localhost:3000') + '/login?error=oauth_failed');
         }
     }
 

@@ -105,12 +105,14 @@ bash install.sh
 This single command does everything:
 
 - ✅ Creates `nginx/ssl` and `backups` directories
-- ✅ Copies `.env.example` → `.env`
-- ✅ Generates random passwords for JWT, sessions, database, and Redis
+- ✅ **If `.env` does NOT exist** → copies `.env.example` → `.env` and generates random passwords for JWT, sessions, database, and Redis
+- ✅ **If `.env` already exists** → skips `.env` creation, keeps your existing config and secrets untouched
 - ✅ Builds all 5 Docker containers from scratch
 - ✅ Starts PostgreSQL 16, Redis 7, Backend, Frontend, and Nginx
 - ✅ Waits for the database to be ready
 - ✅ Runs Prisma database migrations to create all tables
+
+> **💡 Safe to run again:** If you already ran `install.sh` before and have a `.env` file, running it again will NOT overwrite your secrets or config. It will just rebuild and restart everything.
 
 Wait for it to finish. You'll see:
 
@@ -232,6 +234,42 @@ Now when you refresh the website, you'll have access to the **Admin Dashboard** 
 4. Users can now create servers using this plan
 
 ### 🎉 Done! Your hosting platform is live.
+
+---
+
+## 🔁 Auto-Restart on VPS Reboot
+
+All containers are configured with `restart: unless-stopped` in `docker-compose.yml`. This means:
+
+- ✅ **If your VPS reboots** — all 5 containers (database, redis, backend, frontend, nginx) will restart automatically
+- ✅ **If a container crashes** — Docker will restart it automatically
+- ❌ Containers will NOT restart only if you manually stop them with `docker compose down`
+
+**To verify auto-restart is working:**
+
+```bash
+# Check restart policy
+docker inspect gamehost-backend --format '{{.HostConfig.RestartPolicy.Name}}'
+# Should output: unless-stopped
+```
+
+**If you want containers to start even after `docker compose down`**, change the policy to `always`:
+
+```bash
+nano /opt/gamehost/docker-compose.yml
+# Change "restart: unless-stopped" to "restart: always" for each service
+```
+
+**To test it:**
+
+```bash
+# Reboot your VPS
+sudo reboot
+
+# After reconnecting via SSH, check containers are running
+ssh root@your-server-ip
+docker compose -f /opt/gamehost/docker-compose.yml ps
+```
 
 ---
 

@@ -99,6 +99,7 @@ export class BillingService {
         }
 
         const user = await this.prisma.user.findUnique({ where: { id: userId } });
+        if (!user) throw new BadRequestException('User not found');
         const env = this.config.get('CASHFREE_ENV', 'sandbox');
         const baseUrl = env === 'production'
             ? 'https://api.cashfree.com/pg'

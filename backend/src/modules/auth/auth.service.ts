@@ -26,8 +26,8 @@ export class AuthService {
 
     // ---------- Google OAuth ----------
     getGoogleAuthUrl(): string {
-        const clientId = this.config.get('GOOGLE_CLIENT_ID');
-        const callbackUrl = this.config.get('GOOGLE_CALLBACK_URL');
+        const clientId = this.config.get('GOOGLE_CLIENT_ID', '');
+        const callbackUrl = this.config.get('GOOGLE_CALLBACK_URL', '');
         const scopes = encodeURIComponent('openid email profile');
         return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${scopes}&access_type=offline`;
     }
@@ -35,9 +35,9 @@ export class AuthService {
     async handleGoogleCallback(code: string): Promise<{ token: string; user: any }> {
         const { data: tokens } = await axios.post('https://oauth2.googleapis.com/token', {
             code,
-            client_id: this.config.get('GOOGLE_CLIENT_ID'),
-            client_secret: this.config.get('GOOGLE_CLIENT_SECRET'),
-            redirect_uri: this.config.get('GOOGLE_CALLBACK_URL'),
+            client_id: this.config.get('GOOGLE_CLIENT_ID', ''),
+            client_secret: this.config.get('GOOGLE_CLIENT_SECRET', ''),
+            redirect_uri: this.config.get('GOOGLE_CALLBACK_URL', ''),
             grant_type: 'authorization_code',
         });
 
@@ -56,8 +56,8 @@ export class AuthService {
 
     // ---------- Discord OAuth ----------
     getDiscordAuthUrl(): string {
-        const clientId = this.config.get('DISCORD_CLIENT_ID');
-        const callbackUrl = this.config.get('DISCORD_CALLBACK_URL');
+        const clientId = this.config.get('DISCORD_CLIENT_ID', '');
+        const callbackUrl = this.config.get('DISCORD_CALLBACK_URL', '');
         const scopes = encodeURIComponent('identify email');
         return `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${scopes}`;
     }
@@ -67,9 +67,9 @@ export class AuthService {
             'https://discord.com/api/oauth2/token',
             new URLSearchParams({
                 code,
-                client_id: this.config.get('DISCORD_CLIENT_ID'),
-                client_secret: this.config.get('DISCORD_CLIENT_SECRET'),
-                redirect_uri: this.config.get('DISCORD_CALLBACK_URL'),
+                client_id: this.config.get('DISCORD_CLIENT_ID', ''),
+                client_secret: this.config.get('DISCORD_CLIENT_SECRET', ''),
+                redirect_uri: this.config.get('DISCORD_CALLBACK_URL', ''),
                 grant_type: 'authorization_code',
             }).toString(),
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
@@ -81,7 +81,7 @@ export class AuthService {
 
         const avatar = profile.avatar
             ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
-            : null;
+            : undefined;
 
         return this.processOAuthLogin({
             email: profile.email,
@@ -207,7 +207,7 @@ export class AuthService {
     signToken(user: any): string {
         return jwt.sign(
             { sub: user.id, email: user.email, role: user.role },
-            this.config.get<string>('JWT_SECRET'),
+            this.config.get<string>('JWT_SECRET', ''),
             { expiresIn: this.config.get('JWT_EXPIRY', '7d') },
         );
     }
