@@ -6,20 +6,23 @@ set -euo pipefail
 # Usage: bash install.sh
 # ============================================================
 
-# ─── Colors ────────────────────────────────────────────────
+# ─── Colors & Formatting ──────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'
+ITALIC='\033[3m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 YELLOW='\033[33m'
 RED='\033[31m'
 BLUE='\033[34m'
+MAGENTA='\033[35m'
 GRAY='\033[90m'
-WHITE='\033[37m'
+WHITE='\033[97m'
 NC='\033[0m'
 
-# ─── Helpers ───────────────────────────────────────────────
+# ─── Logging Helpers ──────────────────────────────────────
 banner() {
+  clear 2>/dev/null || true
   echo ""
   echo -e "${CYAN}${BOLD}"
   echo "    ██████╗  █████╗ ███╗   ███╗███████╗██╗  ██╗ ██████╗ ███████╗████████╗"
@@ -29,36 +32,50 @@ banner() {
   echo "   ╚██████╔╝██║  ██║██║ ╚═╝ ██║███████╗██║  ██║╚██████╔╝███████║   ██║   "
   echo "    ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   "
   echo -e "${NC}"
-  echo -e "${GRAY}   ─────────────────────────────────────────────────────────────────${NC}"
-  echo -e "${WHITE}${BOLD}                       Installation Script${NC}"
-  echo -e "${GRAY}   ─────────────────────────────────────────────────────────────────${NC}"
+  echo -e "${GRAY}   ══════════════════════════════════════════════════════════════════${NC}"
+  echo -e "${WHITE}${BOLD}                    Production Installation Script${NC}"
+  echo -e "${DIM}${GRAY}                         $(date '+%Y-%m-%d %H:%M:%S %Z')${NC}"
+  echo -e "${GRAY}   ══════════════════════════════════════════════════════════════════${NC}"
   echo ""
 }
 
 section() {
-  echo -e "\n${GRAY}   ┌─${NC} ${BLUE}${BOLD}$1${NC}"
+  echo ""
+  echo -e "${GRAY}   ┌─────────────────────────────────────────────────────────────${NC}"
+  echo -e "${GRAY}   │${NC}  ${BLUE}${BOLD}▶ $1${NC}"
+  echo -e "${GRAY}   ├─────────────────────────────────────────────────────────────${NC}"
 }
 
 ok() {
-  echo -e "${GRAY}   │${NC}  ${GREEN}✔${NC} ${WHITE}$1${NC}"
+  echo -e "${GRAY}   │${NC}  ${GREEN}✔${NC}  ${WHITE}$1${NC}"
 }
 
 info() {
-  echo -e "${GRAY}   │${NC}  ${CYAN}→${NC} ${WHITE}$1${NC}"
+  echo -e "${GRAY}   │${NC}  ${CYAN}→${NC}  ${WHITE}$1${NC}"
+}
+
+detail() {
+  echo -e "${GRAY}   │${NC}     ${DIM}$1${NC}"
 }
 
 warn() {
-  echo -e "${GRAY}   │${NC}  ${YELLOW}⚠${NC} ${WHITE}$1${NC}"
+  echo -e "${GRAY}   │${NC}  ${YELLOW}⚠${NC}  ${YELLOW}$1${NC}"
 }
 
 fail() {
-  echo -e "${GRAY}   │${NC}  ${RED}✘${NC} ${WHITE}$1${NC}"
+  echo -e "${GRAY}   │${NC}  ${RED}✘${NC}  ${RED}${BOLD}$1${NC}"
   section_end
   exit 1
 }
 
+step_time() {
+  local start=$1 label=$2
+  local elapsed=$(( $(date +%s) - start ))
+  echo -e "${GRAY}   │${NC}  ${GREEN}✔${NC}  ${WHITE}${label}${NC} ${DIM}(${elapsed}s)${NC}"
+}
+
 section_end() {
-  echo -e "${GRAY}   └──────────────────────────────────────────${NC}"
+  echo -e "${GRAY}   └─────────────────────────────────────────────────────────────${NC}"
 }
 
 spinner() {
@@ -66,127 +83,610 @@ spinner() {
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   local i=0
   while kill -0 "$pid" 2>/dev/null; do
-    printf "\r${GRAY}   │${NC}  ${CYAN}${frames[$i]}${NC} ${WHITE}${label}${NC}  "
+    printf "\r${GRAY}   │${NC}  ${CYAN}${frames[$i]}${NC}  ${WHITE}${label}${NC}  "
     i=$(( (i+1) % ${#frames[@]} ))
     sleep 0.1
   done
   printf "\r"
 }
 
-# ─── Start ─────────────────────────────────────────────────
-START_TIME=$(date +%s)
+# ─── .env Helper: read a value from a key=value file ──────
+env_get() {
+  local file=$1 key=$2
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-
+}
+
+# ─── .env Helper: set a value (insert or update) ─────────
+env_set() {
+  local file=$1 key=$2 value=$3
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    echo "${key}=${value}" >> "$file"
+  fi
+}
+
+# ─── .env Helper: check if value needs auto-config ───────
+needs_autoconfig() {
+  local value=$1
+  # Empty, placeholder, or known weak defaults → need regeneration
+  [[ -z "$value" \
+    || "$value" == "CHANGE_ME_"* \
+    || "$value" == "admin" \
+    || "$value" == "password" \
+    || "$value" == "secret" \
+    || "$value" == "changeme" \
+    || "$value" == "gamehost_secret" \
+    || "$value" == "gamehost_redis" ]]
+}
+
+# ─── Secret Generator ────────────────────────────────────
+generate_secret() {
+  local length=${1:-64}
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 $(( length * 2 )) | tr -d '\n/+=[:space:]' | head -c "$length"
+  else
+    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c "$length"
+  fi
+}
+
+# ─── URL Resolution (Domain → VPS IP → localhost) ────────
+# Determines the correct base URL for health checks & display
+resolve_base_url() {
+  local fe_port=${1:-3000}
+  local be_port=${2:-4000}
+
+  # Priority 1: APP_URL from .env (user-configured domain)
+  local app_url=$(env_get .env APP_URL 2>/dev/null)
+  if [ -n "$app_url" ] && [[ "$app_url" != *"localhost"* ]]; then
+    # Strip trailing slash
+    BASE_URL="${app_url%/}"
+    URL_SOURCE="domain (.env APP_URL)"
+    return 0
+  fi
+
+  # Priority 2: Detect VPS public IP
+  local public_ip=""
+  if command -v curl >/dev/null 2>&1; then
+    public_ip=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null || \
+                curl -s --max-time 3 https://ifconfig.me 2>/dev/null || \
+                curl -s --max-time 3 https://icanhazip.com 2>/dev/null || true)
+  fi
+
+  # Validate it looks like an IP
+  if [ -n "$public_ip" ] && [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    BASE_URL="http://${public_ip}"
+    URL_SOURCE="VPS public IP"
+    return 0
+  fi
+
+  # Priority 3: Try hostname -I (first non-loopback IP)
+  local host_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  if [ -n "$host_ip" ] && [ "$host_ip" != "127.0.0.1" ]; then
+    BASE_URL="http://${host_ip}"
+    URL_SOURCE="server IP (hostname)"
+    return 0
+  fi
+
+  # Priority 4: Fallback to localhost
+  BASE_URL="http://localhost"
+  URL_SOURCE="localhost (fallback)"
+  return 0
+}
+
+
+# ═══════════════════════════════════════════════════════════
+#                        BEGIN INSTALL
+# ═══════════════════════════════════════════════════════════
+
+INSTALL_START=$(date +%s)
 banner
 
-# ─── Pre-checks ───────────────────────────────────────────
-section "Pre-flight Checks"
+# ─── System Information ───────────────────────────────────
+section "System Information"
 
-command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Run: curl -fsSL https://get.docker.com | sh"
-ok "Docker found"
+OS_NAME=$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || uname -s)
+KERNEL=$(uname -r)
+ARCH=$(uname -m)
+HOSTNAME_VAL=$(hostname 2>/dev/null || echo "unknown")
+TOTAL_RAM=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo "N/A")
+DISK_FREE=$(df -h / 2>/dev/null | awk 'NR==2{print $4}' || echo "N/A")
+CPU_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "N/A")
 
-command -v docker compose >/dev/null 2>&1 && COMPOSE="docker compose" || {
-  command -v docker-compose >/dev/null 2>&1 && COMPOSE="docker-compose" || fail "Docker Compose is not installed."
-}
-ok "Docker Compose found"
-
-command -v openssl >/dev/null 2>&1 && ok "OpenSSL found" || warn "OpenSSL not found — secrets will use fallback"
+info "Hostname       ${BOLD}${HOSTNAME_VAL}${NC}"
+detail "OS             ${OS_NAME}"
+detail "Kernel         ${KERNEL}"
+detail "Architecture   ${ARCH}"
+detail "CPU Cores      ${CPU_CORES}"
+detail "Total RAM      ${TOTAL_RAM}"
+detail "Free Disk      ${DISK_FREE}"
+detail "Install Dir    $(pwd)"
 
 section_end
 
-# ─── Directories ──────────────────────────────────────────
-section "Setup"
-mkdir -p nginx/ssl backups
-ok "Created directories (nginx/ssl, backups)"
+# ─── Pre-flight Checks ───────────────────────────────────
+section "Pre-flight Checks"
 
-# ─── Environment ──────────────────────────────────────────
-if [ ! -f .env ]; then
-  info "No .env found — generating from .env.example"
-  cp .env.example .env
+# Docker
+command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Run: curl -fsSL https://get.docker.com | sh"
+DOCKER_VER=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+ok "Docker ${DIM}v${DOCKER_VER}${NC}"
 
-  # Auto-generate secrets
-  JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
-  SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 64)
-  DB_PASSWORD=$(openssl rand -base64 32 | tr -d '\n/+=' | head -c 32)
-  REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d '\n/+=' | head -c 32)
+# Docker Compose
+command -v docker compose >/dev/null 2>&1 && COMPOSE="docker compose" || {
+  command -v docker-compose >/dev/null 2>&1 && COMPOSE="docker-compose" || fail "Docker Compose is not installed."
+}
+COMPOSE_VER=$($COMPOSE version --short 2>/dev/null || $COMPOSE version 2>/dev/null | awk '{print $NF}')
+ok "Docker Compose ${DIM}v${COMPOSE_VER}${NC}"
 
-  sed -i "s|CHANGE_ME_JWT_SECRET|${JWT_SECRET}|g" .env
-  sed -i "s|CHANGE_ME_SESSION_SECRET|${SESSION_SECRET}|g" .env
-  sed -i "s|CHANGE_ME_DB_PASSWORD|${DB_PASSWORD}|g" .env
-  sed -i "s|CHANGE_ME_REDIS_PASSWORD|${REDIS_PASSWORD}|g" .env
-
-  # Fix connection URLs with generated passwords
-  sed -i "s|postgresql://gamehost:CHANGE_ME_DB_PASSWORD@|postgresql://gamehost:${DB_PASSWORD}@|g" .env
-  sed -i "s|redis://:CHANGE_ME_REDIS_PASSWORD@|redis://:${REDIS_PASSWORD}@|g" .env
-
-  ok "Generated .env with random secrets"
+# OpenSSL
+if command -v openssl >/dev/null 2>&1; then
+  OPENSSL_VER=$(openssl version 2>/dev/null | awk '{print $2}')
+  ok "OpenSSL ${DIM}v${OPENSSL_VER}${NC}"
 else
-  ok ".env exists — keeping your config"
+  warn "OpenSSL not found — using /dev/urandom fallback for secrets"
+fi
+
+# Git
+if command -v git >/dev/null 2>&1; then
+  GIT_VER=$(git --version 2>/dev/null | awk '{print $3}')
+  ok "Git ${DIM}v${GIT_VER}${NC}"
+else
+  info "Git not installed ${DIM}(optional)${NC}"
+fi
+
+# curl (needed for health check)
+if command -v curl >/dev/null 2>&1; then
+  CURL_VER=$(curl --version 2>/dev/null | head -1 | awk '{print $2}')
+  ok "curl ${DIM}v${CURL_VER}${NC}"
+  HAS_CURL=true
+else
+  warn "curl not found — post-install health check will be skipped"
+  HAS_CURL=false
 fi
 
 section_end
 
+# ─── Directory Setup ─────────────────────────────────────
+section "Directory Setup"
+
+mkdir -p nginx/ssl backups
+ok "nginx/ssl"
+ok "backups"
+
+section_end
+
+# ═══════════════════════════════════════════════════════════
+#              SMART .ENV CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+
+section "Environment Configuration"
+
+# Track what we did for the audit summary
+declare -a ENV_GENERATED=()
+declare -a ENV_UPDATED=()
+declare -a ENV_PRESERVED=()
+ENV_CREATED_NEW=false
+
+if [ ! -f .env ]; then
+  # ── Fresh install: create from template ──────────────────
+  ENV_CREATED_NEW=true
+  info "No .env found — creating from .env.example"
+  cp .env.example .env
+  ok "Copied .env.example → .env"
+else
+  info "Existing .env detected — running smart merge"
+
+  # ── Merge missing keys from .env.example ─────────────────
+  ADDED_KEYS=0
+  if [ -f .env.example ]; then
+    while IFS= read -r line; do
+      # Skip comments and blank lines
+      [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+      KEY=$(echo "$line" | cut -d'=' -f1)
+      if ! grep -qE "^${KEY}=" .env 2>/dev/null; then
+        echo "$line" >> .env
+        ADDED_KEYS=$((ADDED_KEYS + 1))
+        detail "Added missing key: ${KEY}"
+      fi
+    done < .env.example
+  fi
+
+  if [ "$ADDED_KEYS" -gt 0 ]; then
+    ok "Merged ${ADDED_KEYS} new key(s) from .env.example"
+  else
+    ok "All keys present — no merge needed"
+  fi
+fi
+
+# ── Auto-configure secrets ─────────────────────────────────
+info "Auditing auto-configurable secrets..."
+echo -e "${GRAY}   │${NC}"
+
+# --- JWT_SECRET ---
+CURRENT_JWT=$(env_get .env JWT_SECRET)
+if needs_autoconfig "$CURRENT_JWT"; then
+  NEW_JWT=$(generate_secret 64)
+  env_set .env JWT_SECRET "$NEW_JWT"
+  if $ENV_CREATED_NEW; then
+    ENV_GENERATED+=("JWT_SECRET")
+  else
+    ENV_UPDATED+=("JWT_SECRET")
+  fi
+  ok "JWT_SECRET             ${GREEN}${BOLD}generated${NC}"
+else
+  ENV_PRESERVED+=("JWT_SECRET")
+  ok "JWT_SECRET             ${DIM}preserved${NC}"
+fi
+
+# --- SESSION_SECRET ---
+CURRENT_SESSION=$(env_get .env SESSION_SECRET)
+if needs_autoconfig "$CURRENT_SESSION"; then
+  NEW_SESSION=$(generate_secret 64)
+  env_set .env SESSION_SECRET "$NEW_SESSION"
+  if $ENV_CREATED_NEW; then
+    ENV_GENERATED+=("SESSION_SECRET")
+  else
+    ENV_UPDATED+=("SESSION_SECRET")
+  fi
+  ok "SESSION_SECRET         ${GREEN}${BOLD}generated${NC}"
+else
+  ENV_PRESERVED+=("SESSION_SECRET")
+  ok "SESSION_SECRET         ${DIM}preserved${NC}"
+fi
+
+# --- DB_PASSWORD ---
+CURRENT_DBPW=$(env_get .env DB_PASSWORD)
+if needs_autoconfig "$CURRENT_DBPW"; then
+  NEW_DBPW=$(generate_secret 32)
+  env_set .env DB_PASSWORD "$NEW_DBPW"
+  if $ENV_CREATED_NEW; then
+    ENV_GENERATED+=("DB_PASSWORD")
+  else
+    ENV_UPDATED+=("DB_PASSWORD")
+  fi
+  ok "DB_PASSWORD            ${GREEN}${BOLD}generated${NC}"
+else
+  NEW_DBPW="$CURRENT_DBPW"
+  ENV_PRESERVED+=("DB_PASSWORD")
+  ok "DB_PASSWORD            ${DIM}preserved${NC}"
+fi
+
+# --- REDIS_PASSWORD ---
+CURRENT_REDISPW=$(env_get .env REDIS_PASSWORD)
+if needs_autoconfig "$CURRENT_REDISPW"; then
+  NEW_REDISPW=$(generate_secret 32)
+  env_set .env REDIS_PASSWORD "$NEW_REDISPW"
+  if $ENV_CREATED_NEW; then
+    ENV_GENERATED+=("REDIS_PASSWORD")
+  else
+    ENV_UPDATED+=("REDIS_PASSWORD")
+  fi
+  ok "REDIS_PASSWORD         ${GREEN}${BOLD}generated${NC}"
+else
+  NEW_REDISPW="$CURRENT_REDISPW"
+  ENV_PRESERVED+=("REDIS_PASSWORD")
+  ok "REDIS_PASSWORD         ${DIM}preserved${NC}"
+fi
+
+# ── Synchronize connection strings ─────────────────────────
+echo -e "${GRAY}   │${NC}"
+info "Syncing connection strings..."
+
+DB_USER_VAL=$(env_get .env DB_USER)
+DB_NAME_VAL=$(env_get .env DB_NAME)
+DB_PORT_VAL=$(env_get .env DB_PORT)
+REDIS_PORT_VAL=$(env_get .env REDIS_PORT)
+
+DB_USER_VAL=${DB_USER_VAL:-gamehost}
+DB_NAME_VAL=${DB_NAME_VAL:-gamehost}
+DB_PORT_VAL=${DB_PORT_VAL:-5432}
+REDIS_PORT_VAL=${REDIS_PORT_VAL:-6379}
+
+NEW_DB_URL="postgresql://${DB_USER_VAL}:${NEW_DBPW}@postgres:${DB_PORT_VAL}/${DB_NAME_VAL}?schema=public"
+NEW_REDIS_URL="redis://:${NEW_REDISPW}@redis:${REDIS_PORT_VAL}"
+
+env_set .env DATABASE_URL "$NEW_DB_URL"
+env_set .env REDIS_URL "$NEW_REDIS_URL"
+ok "DATABASE_URL synced with DB_PASSWORD"
+ok "REDIS_URL synced with REDIS_PASSWORD"
+
+# ── Audit Summary ──────────────────────────────────────────
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${MAGENTA}${BOLD}── Secret Audit Summary ──${NC}"
+
+if [ ${#ENV_GENERATED[@]} -gt 0 ]; then
+  echo -e "${GRAY}   │${NC}  ${GREEN}⬤${NC}  Generated:  ${WHITE}${ENV_GENERATED[*]}${NC}"
+fi
+if [ ${#ENV_UPDATED[@]} -gt 0 ]; then
+  echo -e "${GRAY}   │${NC}  ${YELLOW}⬤${NC}  Updated:    ${WHITE}${ENV_UPDATED[*]}${NC}"
+fi
+if [ ${#ENV_PRESERVED[@]} -gt 0 ]; then
+  echo -e "${GRAY}   │${NC}  ${BLUE}⬤${NC}  Preserved:  ${WHITE}${ENV_PRESERVED[*]}${NC}"
+fi
+
+section_end
+
+# ═══════════════════════════════════════════════════════════
+#                   BUILD & DEPLOY
+# ═══════════════════════════════════════════════════════════
+
 # ─── Build ────────────────────────────────────────────────
 section "Building Containers"
-info "This may take a few minutes on first run..."
+info "Building all Docker images (this may take a few minutes)..."
+
+BUILD_START=$(date +%s)
 
 $COMPOSE build --no-cache > /dev/null 2>&1 &
 BUILD_PID=$!
 spinner $BUILD_PID "Building images"
 wait $BUILD_PID
-ok "All images built"
+
+step_time $BUILD_START "All images built successfully"
 
 section_end
 
-# ─── Start ────────────────────────────────────────────────
+# ─── Start Services ──────────────────────────────────────
 section "Starting Services"
 
+SERVICE_START=$(date +%s)
+
 $COMPOSE up -d > /dev/null 2>&1
-ok "PostgreSQL 16"
-ok "Redis 7"
-ok "Backend (NestJS)"
-ok "Frontend (Next.js)"
-ok "Nginx (Reverse Proxy)"
+ok "PostgreSQL 16           ${DIM}(gamehost-db)${NC}"
+ok "Redis 7                 ${DIM}(gamehost-redis)${NC}"
+ok "Backend — NestJS        ${DIM}(gamehost-backend)${NC}"
+ok "Frontend — Next.js      ${DIM}(gamehost-frontend)${NC}"
+ok "Nginx — Reverse Proxy   ${DIM}(gamehost-nginx)${NC}"
+
+step_time $SERVICE_START "All services started"
 
 section_end
 
-# ─── Wait for DB ──────────────────────────────────────────
-section "Database"
-info "Waiting for PostgreSQL..."
+# ─── Database ─────────────────────────────────────────────
+section "Database Initialization"
 
+info "Waiting for PostgreSQL to accept connections..."
+
+DB_WAIT_START=$(date +%s)
 for i in $(seq 1 30); do
-  if $COMPOSE exec -T postgres pg_isready -U gamehost >/dev/null 2>&1; then
-    ok "PostgreSQL is ready"
+  if $COMPOSE exec -T postgres pg_isready -U "${DB_USER_VAL}" >/dev/null 2>&1; then
+    step_time $DB_WAIT_START "PostgreSQL is ready"
     break
   fi
-  [ "$i" -eq 30 ] && fail "PostgreSQL did not start in time"
+  [ "$i" -eq 30 ] && fail "PostgreSQL did not start within 60 seconds"
   sleep 2
 done
 
-# ─── Migrations ───────────────────────────────────────────
-info "Running migrations..."
+# Migrations
+MIGRATE_START=$(date +%s)
+info "Running Prisma migrations..."
 $COMPOSE exec -T backend npx prisma migrate deploy > /dev/null 2>&1
-ok "Migrations applied"
+step_time $MIGRATE_START "Migrations applied"
 
 section_end
 
-# ─── Done ─────────────────────────────────────────────────
-END_TIME=$(date +%s)
-ELAPSED=$(( END_TIME - START_TIME ))
+# ═══════════════════════════════════════════════════════════
+#                   URL RESOLUTION
+# ═══════════════════════════════════════════════════════════
 
-section "Installation Complete"
-ok "Total time: ${ELAPSED}s"
+section "Resolving Access URL"
+
+FE_PORT=$(env_get .env FRONTEND_PORT)
+BE_PORT=$(env_get .env BACKEND_PORT)
+FE_PORT=${FE_PORT:-3000}
+BE_PORT=${BE_PORT:-4000}
+
+resolve_base_url "$FE_PORT" "$BE_PORT"
+ok "Resolved via ${BOLD}${URL_SOURCE}${NC}"
+detail "Base URL: ${BASE_URL}"
+
+# Build access URLs
+# If domain (has no port in URL), use clean URLs (Nginx proxies)
+# If IP/localhost, append ports
+if [[ "$BASE_URL" == https://* ]] || [[ "$URL_SOURCE" == "domain"* ]]; then
+  FRONTEND_URL="${BASE_URL}"
+  BACKEND_URL="${BASE_URL}/api"
+  HEALTH_URL="${BASE_URL}/api/health"
+  HEALTH_INTERNAL="http://localhost:${BE_PORT}/api/health"
+else
+  FRONTEND_URL="${BASE_URL}:${FE_PORT}"
+  BACKEND_URL="${BASE_URL}:${BE_PORT}"
+  HEALTH_URL="${BASE_URL}:${BE_PORT}/api/health"
+  HEALTH_INTERNAL="http://localhost:${BE_PORT}/api/health"
+fi
+
+detail "Frontend:  ${FRONTEND_URL}"
+detail "Backend:   ${BACKEND_URL}"
+detail "Health:    ${HEALTH_URL}"
+
 section_end
+
+# ═══════════════════════════════════════════════════════════
+#                   HEALTH CHECK
+# ═══════════════════════════════════════════════════════════
+
+if $HAS_CURL; then
+
+section "Service Health Check"
+
+info "Waiting for backend API to become ready..."
+
+HEALTH_OK=false
+HEALTH_BODY=""
+
+# Try internal (localhost) first — always reachable from the server itself
+# Then fall back to external URL if internal fails
+HEALTH_ENDPOINTS=("$HEALTH_INTERNAL")
+if [ "$HEALTH_INTERNAL" != "$HEALTH_URL" ]; then
+  HEALTH_ENDPOINTS+=("$HEALTH_URL")
+fi
+
+for attempt in $(seq 1 15); do
+  for endpoint in "${HEALTH_ENDPOINTS[@]}"; do
+    HEALTH_BODY=$(curl -s --max-time 5 "$endpoint" 2>/dev/null || true)
+    if [ -n "$HEALTH_BODY" ]; then
+      STATUS=$(echo "$HEALTH_BODY" | grep -oP '"status"\s*:\s*"[^"]*"' | head -1 | grep -oP '"[^"]*"$' | tr -d '"' || true)
+      if [ -n "$STATUS" ]; then
+        HEALTH_OK=true
+        HEALTH_HIT_URL="$endpoint"
+        break 2
+      fi
+    fi
+  done
+
+  if (( attempt % 3 == 0 )); then
+    detail "Attempt ${attempt}/15 — backend still starting up..."
+  fi
+  sleep 2
+done
+
+echo -e "${GRAY}   │${NC}"
+
+if $HEALTH_OK; then
+  if [[ "$STATUS" == "ok" || "$STATUS" == "healthy" ]]; then
+    ok "API Health            ${GREEN}${BOLD}HEALTHY${NC}"
+  else
+    warn "API Health            ${YELLOW}${BOLD}${STATUS}${NC}"
+  fi
+  detail "Checked via: ${HEALTH_HIT_URL}"
+
+  # Parse database status
+  DB_STATUS=$(echo "$HEALTH_BODY" | grep -oP '"database"\s*:\s*\{[^}]*"status"\s*:\s*"([^"]*)"' | grep -oP '"[^"]*"$' | tr -d '"' 2>/dev/null || true)
+  if [ -z "$DB_STATUS" ]; then
+    DB_STATUS=$(echo "$HEALTH_BODY" | grep -oP '"db"\s*:\s*\{[^}]*"status"\s*:\s*"([^"]*)"' | grep -oP '"[^"]*"$' | tr -d '"' 2>/dev/null || true)
+  fi
+  if [ -n "$DB_STATUS" ]; then
+    if [[ "$DB_STATUS" == "up" || "$DB_STATUS" == "ok" || "$DB_STATUS" == "healthy" ]]; then
+      ok "  └─ Database         ${GREEN}UP${NC}"
+    else
+      warn "  └─ Database         ${RED}${DB_STATUS}${NC}"
+    fi
+  fi
+
+  # Parse redis status
+  REDIS_STATUS=$(echo "$HEALTH_BODY" | grep -oP '"redis"\s*:\s*\{[^}]*"status"\s*:\s*"([^"]*)"' | grep -oP '"[^"]*"$' | tr -d '"' 2>/dev/null || true)
+  if [ -z "$REDIS_STATUS" ]; then
+    REDIS_STATUS=$(echo "$HEALTH_BODY" | grep -oP '"memory"\s*:\s*\{[^}]*"status"\s*:\s*"([^"]*)"' | grep -oP '"[^"]*"$' | tr -d '"' 2>/dev/null || true)
+  fi
+  if [ -n "$REDIS_STATUS" ]; then
+    if [[ "$REDIS_STATUS" == "up" || "$REDIS_STATUS" == "ok" || "$REDIS_STATUS" == "healthy" ]]; then
+      ok "  └─ Redis            ${GREEN}UP${NC}"
+    else
+      warn "  └─ Redis            ${RED}${REDIS_STATUS}${NC}"
+    fi
+  fi
+
+  # Response time
+  RESP_TIME=$(curl -s -o /dev/null -w "%{time_total}" --max-time 5 "$HEALTH_HIT_URL" 2>/dev/null || echo "N/A")
+  if [ "$RESP_TIME" != "N/A" ]; then
+    RESP_MS=$(echo "$RESP_TIME" | awk '{printf "%.0f", $1 * 1000}')
+    ok "  └─ Response Time    ${DIM}${RESP_MS}ms${NC}"
+  fi
+
+else
+  warn "Backend did not respond within 30 seconds"
+  detail "This may be normal on first boot — the backend needs time to compile."
+  detail "Check logs with: docker compose logs -f backend"
+  detail "Health endpoint: ${HEALTH_URL}"
+fi
+
+section_end
+
+fi  # end HAS_CURL
+
+# ═══════════════════════════════════════════════════════════
+#                 CONFIGURATION REPORT
+# ═══════════════════════════════════════════════════════════
+
+section "Configuration Report"
+
+info "Ports"
+detail "Frontend:   ${FE_PORT}"
+detail "Backend:    ${BE_PORT}"
+detail "Nginx:      80 / 443"
+detail "PostgreSQL: ${DB_PORT_VAL}"
+detail "Redis:      ${REDIS_PORT_VAL}"
+
+echo -e "${GRAY}   │${NC}"
+
+# Check enabled integrations
+info "Integrations"
+check_enabled() {
+  local key=$1 label=$2
+  local val=$(env_get .env "$key")
+  if [[ "$val" == "true" ]]; then
+    ok "${label}  ${GREEN}enabled${NC}"
+  else
+    detail "${label}  ${DIM}disabled${NC}"
+  fi
+}
+check_enabled "RAZORPAY_ENABLED"   "Razorpay        "
+check_enabled "CASHFREE_ENABLED"   "Cashfree        "
+check_enabled "UPI_ENABLED"        "UPI Manual      "
+check_enabled "DATALIX_ENABLED"    "Datalix VPS     "
+check_enabled "CLOUDFLARE_ENABLED" "Cloudflare DNS  "
+check_enabled "PAYMENTER_ENABLED"  "Paymenter       "
+
+echo -e "${GRAY}   │${NC}"
+
+# Check for missing important config
+info "Attention Required"
+ATTENTION_COUNT=0
+
+warn_if_empty() {
+  local key=$1 label=$2
+  local val=$(env_get .env "$key")
+  if [[ -z "$val" ]]; then
+    warn "${label} not configured"
+    ATTENTION_COUNT=$((ATTENTION_COUNT + 1))
+  fi
+}
+
+warn_if_empty "GOOGLE_CLIENT_ID"      "Google OAuth"
+warn_if_empty "DISCORD_CLIENT_ID"     "Discord OAuth"
+warn_if_empty "PTERODACTYL_APP_KEY"   "Pterodactyl App Key"
+warn_if_empty "PTERODACTYL_CLIENT_KEY" "Pterodactyl Client Key"
+warn_if_empty "DISCORD_BOT_TOKEN"     "Discord Bot Token"
+
+if [ "$ATTENTION_COUNT" -eq 0 ]; then
+  ok "All important keys are configured"
+fi
+
+section_end
+
+# ═══════════════════════════════════════════════════════════
+#                    INSTALL COMPLETE
+# ═══════════════════════════════════════════════════════════
+
+INSTALL_END=$(date +%s)
+TOTAL_ELAPSED=$(( INSTALL_END - INSTALL_START ))
+
+# Format elapsed time
+if [ "$TOTAL_ELAPSED" -ge 60 ]; then
+  ELAPSED_FMT="$(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
+else
+  ELAPSED_FMT="${TOTAL_ELAPSED}s"
+fi
 
 echo ""
-echo -e "${GRAY}   ┌──────────────────────────────────────────────────────────┐${NC}"
-echo -e "${GRAY}   │${NC}                                                          ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${GREEN}${BOLD}GameHost is running!${NC}                                   ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}                                                          ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${WHITE}Frontend${NC}  ${CYAN}http://localhost:3000${NC}                       ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${WHITE}Backend${NC}   ${CYAN}http://localhost:4000${NC}                       ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${WHITE}Health${NC}    ${CYAN}http://localhost:4000/api/health${NC}             ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}                                                          ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${DIM}Edit .env to configure OAuth & Pterodactyl${NC}             ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}   ${DIM}Then run: docker compose down && docker compose up -d${NC}  ${GRAY}│${NC}"
-echo -e "${GRAY}   │${NC}                                                          ${GRAY}│${NC}"
-echo -e "${GRAY}   └──────────────────────────────────────────────────────────┘${NC}"
+echo -e "${GRAY}   ╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${GREEN}${BOLD}✔  GameHost Platform is running!${NC}                            ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}Installed in ${ELAPSED_FMT} · via ${URL_SOURCE}${NC}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${WHITE}${BOLD}Access Points${NC}                                               ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Frontend${NC}     ${FRONTEND_URL}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Backend${NC}      ${BACKEND_URL}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       ${HEALTH_URL}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${WHITE}${BOLD}Next Steps${NC}                                                  ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}1. Edit .env to configure OAuth & Pterodactyl${NC}              ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}2. Restart: docker compose down && docker compose up -d${NC}    ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}3. View logs: docker compose logs -f backend${NC}               ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
+echo -e "${GRAY}   ╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
