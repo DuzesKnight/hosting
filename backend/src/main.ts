@@ -58,13 +58,28 @@ function logSectionEnd() {
     console.log(`${c.gray}   └──────────────────────────────────────────${c.reset}`);
 }
 
+// ─── Catch fatal errors BEFORE anything else ─────────────
+process.on('unhandledRejection', (reason: any) => {
+    console.error(`\x1b[31m\x1b[1m   ✘  Unhandled Promise Rejection:\x1b[0m`, reason);
+});
+process.on('uncaughtException', (err: Error) => {
+    console.error(`\x1b[31m\x1b[1m   ✘  Uncaught Exception:\x1b[0m`, err);
+    process.exit(1);
+});
+
 async function bootstrap() {
     const startTime = Date.now();
     printBanner();
 
     // ─── Create Application ──────────────────────────────
     logSection('Initializing');
-    const app = await NestFactory.create(AppModule, { logger: false });
+
+    // Use a console logger so module‑init errors (Prisma, imports, etc.)
+    // are ALWAYS visible.  The pretty banner has already been printed,
+    // so we only need error/warn/log coming through during init.
+    const app = await NestFactory.create(AppModule, {
+        logger: ['error', 'warn', 'log'],
+    });
     const config = app.get(ConfigService);
     logDone('NestJS application created');
 
@@ -105,14 +120,11 @@ async function bootstrap() {
     const env = config.get('NODE_ENV', 'development');
     await app.listen(port, '0.0.0.0');
 
-    const bootTime = ((Date.now() - startTime) / 1000).toFixed(2);
-
     logSection('Server Online');
     logDone('Status', '🟢 Running');
     logDone('Port', `${port}`);
     logDone('Host', '0.0.0.0');
     logDone('Environment', env);
-    logDone('Boot time', `${bootTime}s`);
     logSectionEnd();
 
     // ─── Endpoints ──────────────────────────────────────
@@ -131,14 +143,36 @@ async function bootstrap() {
     logDone('Discord OAuth', config.get('DISCORD_CLIENT_ID', '') ? 'configured' : '⚠ not set');
     logDone('Discord Bot', config.get('DISCORD_BOT_TOKEN', '') ? 'enabled' : 'disabled');
     logDone('Cloudflare DNS', config.get('CLOUDFLARE_ENABLED', 'false') === 'true' ? 'enabled' : 'disabled');
+    logDone('SMTP / Email', config.get('SMTP_HOST', '') ? `configured (${config.get('SMTP_HOST')})` : 'disabled (console-only)');
+    logDone('Datalix VPS', config.get('DATALIX_ENABLED', 'false') === 'true' ? 'enabled' : 'disabled');
     logSectionEnd();
 
-    console.log(`\n${c.gray}   Ready to accept connections.${c.reset}`);
-    console.log(`${c.gray}   Press Ctrl+C to stop.\n${c.reset}`);
+    // ─── SUCCESS BANNER ──────────────────────────────────
+    const bootTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log('');
+    console.log(`${c.green}${c.bold}   ══════════════════════════════════════════════════════════${c.reset}`);
+    console.log(`${c.green}${c.bold}    ✔  GameHost Platform — Successfully Started!${c.reset}`);
+    console.log(`${c.green}${c.bold}   ══════════════════════════════════════════════════════════${c.reset}`);
+    console.log(`${c.gray}       Port ${port} · ${env} · Boot time ${bootTime}s${c.reset}`);
+    console.log(`${c.cyan}       API:    http://localhost:${port}/api${c.reset}`);
+    console.log(`${c.cyan}       Health: http://localhost:${port}/api/health${c.reset}`);
+    console.log(`${c.gray}       Ready to accept connections. Press Ctrl+C to stop.${c.reset}`);
+    console.log('');
 
     // Re-enable NestJS logger for runtime
     const runtimeLogger = new Logger('GameHost');
     runtimeLogger.log(`Server started in ${bootTime}s on port ${port}`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+    console.error('');
+    console.error(`\x1b[31m\x1b[1m   ══════════════════════════════════════════════════════════\x1b[0m`);
+    console.error(`\x1b[31m\x1b[1m    ✘  GameHost Platform — Failed to Start!\x1b[0m`);
+    console.error(`\x1b[31m\x1b[1m   ══════════════════════════════════════════════════════════\x1b[0m`);
+    console.error(`\x1b[31m   ${err.message || err}\x1b[0m`);
+    if (err.stack) {
+        console.error(`\x1b[90m${err.stack}\x1b[0m`);
+    }
+    console.error('');
+    process.exit(1);
+});

@@ -42,6 +42,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${DB_USER:-gamehost}:${DB_PASSWORD:-gamehost_secret}@postgres:5432/${DB_NAME:-gamehost}?schema=public
       REDIS_URL: redis://:${REDIS_PASSWORD:-gamehost_redis}@redis:6379
+      # Force internal listen port = 4000 so nginx upstream stays consistent.
+      # BACKEND_PORT in .env controls only the HOST-side mapping below.
+      BACKEND_PORT: "4000"
     ports:
       - "${BACKEND_PORT:-4000}:4000"
     depends_on:
