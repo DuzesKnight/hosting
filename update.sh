@@ -18,6 +18,31 @@ set -euo pipefail
 #  10. Health check & rollback guidance on failure
 # ============================================================
 
+# ─── Build log (captured so errors are never lost) ────────
+BUILD_LOG="/tmp/gamehost-update-$(date +%s).log"
+
+# ─── Global error trap — ensures set -e never dies silently ─
+on_error() {
+  local exit_code=$? lineno=${BASH_LINENO[0]:-0}
+  echo "" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  echo -e "\033[31m\033[1m    ✘  Update failed unexpectedly  (line ${lineno}, exit ${exit_code})\033[0m" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  if [ -s "$BUILD_LOG" ]; then
+    echo -e "\033[33m   Last 30 lines of build log ($BUILD_LOG):\033[0m" >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+    tail -30 "$BUILD_LOG" | sed 's/^/   /' >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+  fi
+  echo -e "\033[33m   Debug commands:\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 backend\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 frontend\033[0m" >&2
+  echo -e "\033[90m     cat $BUILD_LOG\033[0m" >&2
+  echo "" >&2
+  exit "$exit_code"
+}
+trap on_error ERR
+
 # ─── Colors & Formatting ──────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -459,10 +484,19 @@ fi
 
 BUILD_START=$(date +%s)
 
-$COMPOSE build $BUILD_NO_CACHE > /dev/null 2>&1 &
+$COMPOSE build $BUILD_NO_CACHE >> "$BUILD_LOG" 2>&1 &
 BUILD_PID=$!
 spinner $BUILD_PID "Building images"
-wait $BUILD_PID || fail "Docker build failed — your containers were NOT restarted. Previous version is still running."
+
+if ! wait $BUILD_PID; then
+  echo ""
+  fail "Docker build failed — previous version still running. Last 25 lines:
+
+$(tail -25 "$BUILD_LOG" | sed 's/^/         /')
+
+   Full log: ${BUILD_LOG}
+   Re-run:   docker compose build --no-cache 2>&1 | tee build.log"
+fi
 
 step_time $BUILD_START "All images rebuilt"
 
@@ -483,7 +517,10 @@ detail "Database and Redis remain running (data preserved)"
 
 # Recreate application containers with new images
 info "Starting updated containers..."
-$COMPOSE up -d > /dev/null 2>&1
+if ! $COMPOSE up -d >> "$BUILD_LOG" 2>&1; then
+  fail "docker compose up -d failed! Check: docker compose logs --tail=50
+   Full log: ${BUILD_LOG}"
+fi
 ok "PostgreSQL 16           ${DIM}(gamehost-db)${NC}"
 ok "Redis 7                 ${DIM}(gamehost-redis)${NC}"
 ok "Backend — NestJS        ${DIM}(gamehost-backend)${NC}"

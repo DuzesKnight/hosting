@@ -23,6 +23,17 @@ set -euo pipefail
 #   0 2 * * 0 cd /opt/gamehost && bash backup.sh --full --verify --encrypt >> /var/log/gamehost-backup.log 2>&1
 # ============================================================
 
+# ─── Global error trap — ensures set -e never dies silently ─
+on_error() {
+  local exit_code=$? lineno=${BASH_LINENO[0]:-0}
+  echo "" >&2
+  echo -e "\033[31m\033[1m   ✘  Backup failed unexpectedly  (line ${lineno}, exit ${exit_code})\033[0m" >&2
+  echo -e "\033[33m   Check output above for details.\033[0m" >&2
+  echo "" >&2
+  exit "$exit_code"
+}
+trap on_error ERR
+
 # ─── Colors & Formatting ──────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'

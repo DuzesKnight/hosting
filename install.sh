@@ -6,6 +6,31 @@ set -euo pipefail
 # Usage: bash install.sh
 # ============================================================
 
+# ─── Build log (captured so errors are never lost) ────────
+BUILD_LOG="/tmp/gamehost-install-$(date +%s).log"
+
+# ─── Global error trap — ensures set -e never dies silently ─
+on_error() {
+  local exit_code=$? lineno=${BASH_LINENO[0]:-0}
+  echo "" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  echo -e "\033[31m\033[1m    ✘  Install failed unexpectedly  (line ${lineno}, exit ${exit_code})\033[0m" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  if [ -s "$BUILD_LOG" ]; then
+    echo -e "\033[33m   Last 30 lines of build log ($BUILD_LOG):\033[0m" >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+    tail -30 "$BUILD_LOG" | sed 's/^/   /' >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+  fi
+  echo -e "\033[33m   Debug commands:\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 backend\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 frontend\033[0m" >&2
+  echo -e "\033[90m     cat $BUILD_LOG\033[0m" >&2
+  echo "" >&2
+  exit "$exit_code"
+}
+trap on_error ERR
+
 # ─── Colors & Formatting ──────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -586,13 +611,23 @@ section_end
 # ─── Build ────────────────────────────────────────────────
 section "Building Containers"
 info "Building all Docker images (this may take a few minutes)..."
+detail "Build log: ${BUILD_LOG}"
 
 BUILD_START=$(date +%s)
 
-$COMPOSE build --no-cache > /dev/null 2>&1 &
+$COMPOSE build --no-cache >> "$BUILD_LOG" 2>&1 &
 BUILD_PID=$!
 spinner $BUILD_PID "Building images"
-wait $BUILD_PID
+
+if ! wait $BUILD_PID; then
+  echo ""
+  fail "Docker build failed! Last 25 lines of output:
+
+$(tail -25 "$BUILD_LOG" | sed 's/^/         /')
+
+   Full log: ${BUILD_LOG}
+   Re-run with:  docker compose build --no-cache 2>&1 | tee build.log"
+fi
 
 step_time $BUILD_START "All images built successfully"
 
@@ -603,7 +638,11 @@ section "Starting Services"
 
 SERVICE_START=$(date +%s)
 
-$COMPOSE up -d > /dev/null 2>&1
+if ! $COMPOSE up -d >> "$BUILD_LOG" 2>&1; then
+  fail "docker compose up -d failed! Check: docker compose logs --tail=50
+
+   Full log: ${BUILD_LOG}"
+fi
 ok "PostgreSQL 16           ${DIM}(gamehost-db)${NC}"
 ok "Redis 7                 ${DIM}(gamehost-redis)${NC}"
 ok "Backend — NestJS        ${DIM}(gamehost-backend)${NC}"
@@ -632,8 +671,14 @@ done
 # Migrations
 MIGRATE_START=$(date +%s)
 info "Running Prisma migrations..."
-$COMPOSE exec -T backend npx prisma migrate deploy > /dev/null 2>&1
-step_time $MIGRATE_START "Migrations applied"
+if ! $COMPOSE exec -T backend npx prisma migrate deploy >> "$BUILD_LOG" 2>&1; then
+  warn "Prisma migration failed — this may be OK on first run"
+  detail "The backend entrypoint also runs migrations on start."
+  detail "Check: docker compose logs backend | grep -i 'prisma\\|migrate'"
+  detail "Full log: ${BUILD_LOG}"
+else
+  step_time $MIGRATE_START "Migrations applied"
+fi
 
 section_end
 

@@ -11,6 +11,31 @@ set -euo pipefail
 #                     (postgres, redis, backend, frontend, nginx)
 # ============================================================
 
+# ─── Build log (captured so errors are never lost) ────────
+BUILD_LOG="/tmp/gamehost-restart-$(date +%s).log"
+
+# ─── Global error trap — ensures set -e never dies silently ─
+on_error() {
+  local exit_code=$? lineno=${BASH_LINENO[0]:-0}
+  echo "" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  echo -e "\033[31m\033[1m    ✘  Restart failed unexpectedly  (line ${lineno}, exit ${exit_code})\033[0m" >&2
+  echo -e "\033[31m\033[1m   ══════════════════════════════════════════════════════════\033[0m" >&2
+  if [ -s "$BUILD_LOG" ]; then
+    echo -e "\033[33m   Last 30 lines of log ($BUILD_LOG):\033[0m" >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+    tail -30 "$BUILD_LOG" | sed 's/^/   /' >&2
+    echo -e "\033[90m   ────────────────────────────────────────────\033[0m" >&2
+  fi
+  echo -e "\033[33m   Debug commands:\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 backend\033[0m" >&2
+  echo -e "\033[90m     docker compose logs --tail=50 frontend\033[0m" >&2
+  echo -e "\033[90m     cat $BUILD_LOG\033[0m" >&2
+  echo "" >&2
+  exit "$exit_code"
+}
+trap on_error ERR
+
 # ─── Colors & Formatting ──────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -185,11 +210,13 @@ if [ -n "$TARGET_SERVICE" ]; then
   $FOUND || fail "Unknown service '${TARGET_SERVICE}'. Valid: ${VALID_SERVICES[*]}"
 
   info "Stopping ${TARGET_SERVICE}..."
-  $COMPOSE stop "$TARGET_SERVICE" > /dev/null 2>&1
+  $COMPOSE stop "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1 || true
   ok "Stopped ${TARGET_SERVICE}"
 
   info "Starting ${TARGET_SERVICE}..."
-  $COMPOSE up -d "$TARGET_SERVICE" > /dev/null 2>&1
+  if ! $COMPOSE up -d "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1; then
+    fail "Failed to start ${TARGET_SERVICE} — check: docker compose logs ${TARGET_SERVICE}"
+  fi
   ok "Started ${TARGET_SERVICE}"
 
   # If restarting backend, wait for it and run health check
@@ -239,20 +266,20 @@ else
   info "Stopping services in safe order..."
 
   # 1. Stop nginx first (stop accepting new requests)
-  $COMPOSE stop nginx > /dev/null 2>&1 && ok "Nginx stopped (no new traffic)" || detail "Nginx was not running"
+  $COMPOSE stop nginx >> "$BUILD_LOG" 2>&1 && ok "Nginx stopped (no new traffic)" || detail "Nginx was not running"
 
   # 2. Stop frontend (no more page loads)
-  $COMPOSE stop frontend > /dev/null 2>&1 && ok "Frontend stopped" || detail "Frontend was not running"
+  $COMPOSE stop frontend >> "$BUILD_LOG" 2>&1 && ok "Frontend stopped" || detail "Frontend was not running"
 
   # 3. Stop backend (let in-flight requests drain)
   info "Draining backend connections (5s grace)..."
-  $COMPOSE stop -t 10 backend > /dev/null 2>&1 && ok "Backend stopped (graceful)" || detail "Backend was not running"
+  $COMPOSE stop -t 10 backend >> "$BUILD_LOG" 2>&1 && ok "Backend stopped (graceful)" || detail "Backend was not running"
 
   # 4. Stop redis
-  $COMPOSE stop redis > /dev/null 2>&1 && ok "Redis stopped" || detail "Redis was not running"
+  $COMPOSE stop redis >> "$BUILD_LOG" 2>&1 && ok "Redis stopped" || detail "Redis was not running"
 
   # 5. Stop postgres last (ensure all writes flushed)
-  $COMPOSE stop -t 15 postgres > /dev/null 2>&1 && ok "PostgreSQL stopped (data flushed)" || detail "PostgreSQL was not running"
+  $COMPOSE stop -t 15 postgres >> "$BUILD_LOG" 2>&1 && ok "PostgreSQL stopped (data flushed)" || detail "PostgreSQL was not running"
 
   step_time $STOP_START "All services stopped safely"
   section_end
@@ -260,7 +287,7 @@ else
   # ── Remove Stopped Containers ──────────────────────────
   section "Cleanup"
 
-  $COMPOSE rm -f > /dev/null 2>&1
+  $COMPOSE rm -f >> "$BUILD_LOG" 2>&1
   ok "Removed stopped containers"
   detail "Volumes preserved (pgdata, redisdata)"
 
@@ -271,7 +298,10 @@ else
 
   UP_START=$(date +%s)
 
-  $COMPOSE up -d > /dev/null 2>&1
+  if ! $COMPOSE up -d >> "$BUILD_LOG" 2>&1; then
+    fail "docker compose up -d failed! Check: docker compose logs --tail=50
+   Full log: ${BUILD_LOG}"
+  fi
   ok "PostgreSQL 16           ${DIM}(gamehost-db)${NC}"
   ok "Redis 7                 ${DIM}(gamehost-redis)${NC}"
   ok "Backend — NestJS        ${DIM}(gamehost-backend)${NC}"
