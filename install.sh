@@ -391,6 +391,129 @@ env_set .env REDIS_URL "$NEW_REDIS_URL"
 ok "DATABASE_URL synced with DB_PASSWORD"
 ok "REDIS_URL synced with REDIS_PASSWORD"
 
+# ── Sync OAuth Redirect URLs & App URLs ────────────────────
+echo -e "${GRAY}   │${NC}"
+info "Syncing OAuth redirect URLs & app URLs..."
+
+# Resolve base URL early for OAuth callback computation
+FE_PORT_EARLY=$(env_get .env FRONTEND_PORT)
+BE_PORT_EARLY=$(env_get .env BACKEND_PORT)
+FE_PORT_EARLY=${FE_PORT_EARLY:-3000}
+BE_PORT_EARLY=${BE_PORT_EARLY:-4000}
+
+resolve_base_url "$FE_PORT_EARLY" "$BE_PORT_EARLY"
+
+# Determine the correct callback base
+# Domain (nginx proxied): https://domain.com  → /api/auth/... via nginx
+# IP/localhost:           http://ip:4000      → direct backend port
+IS_DOMAIN=false
+if [[ "$URL_SOURCE" == "domain"* ]]; then
+  IS_DOMAIN=true
+fi
+
+if $IS_DOMAIN; then
+  CALLBACK_BASE="${BASE_URL}"
+  RESOLVED_APP_URL="${BASE_URL}"
+
+  # Validate: if APP_URL is https://, warn if nginx SSL is not enabled
+  if [[ "$BASE_URL" == https://* ]]; then
+    if [ -f nginx/nginx.conf ]; then
+      if ! grep -q '^[[:space:]]*listen.*443' nginx/nginx.conf 2>/dev/null; then
+        warn "APP_URL uses HTTPS but nginx SSL is not enabled!"
+        detail "Either enable SSL in nginx/nginx.conf (uncomment listen 443 + certs)"
+        detail "or change APP_URL to http:// if using an external SSL proxy (Cloudflare, etc.)"
+        detail "OAuth redirects will fail if HTTPS is not reachable."
+      fi
+    fi
+    # Also validate that SSL cert files exist if using self-managed SSL
+    if [ -f nginx/nginx.conf ] && grep -q 'ssl_certificate' nginx/nginx.conf 2>/dev/null; then
+      if [ ! -f nginx/ssl/fullchain.pem ] || [ ! -f nginx/ssl/privkey.pem ]; then
+        warn "SSL certificate files not found in nginx/ssl/"
+        detail "Expected: nginx/ssl/fullchain.pem and nginx/ssl/privkey.pem"
+      fi
+    fi
+  fi
+else
+  CALLBACK_BASE="${BASE_URL}:${BE_PORT_EARLY}"
+  RESOLVED_APP_URL="${BASE_URL}:${FE_PORT_EARLY}"
+fi
+
+# Construct OAuth redirect URLs
+GOOGLE_REDIRECT="${CALLBACK_BASE}/api/auth/google/callback"
+DISCORD_REDIRECT="${CALLBACK_BASE}/api/auth/discord/callback"
+
+# --- APP_URL ---
+CURRENT_APP_URL=$(env_get .env APP_URL)
+if [[ -z "$CURRENT_APP_URL" || "$CURRENT_APP_URL" == "http://localhost"* ]]; then
+  env_set .env APP_URL "$RESOLVED_APP_URL"
+  ok "APP_URL                ${GREEN}${BOLD}synced${NC} → ${RESOLVED_APP_URL}"
+else
+  ok "APP_URL                ${DIM}preserved${NC} → ${CURRENT_APP_URL}"
+fi
+
+# --- BACKEND_URL ---
+if $IS_DOMAIN; then
+  # Domain mode: backend is behind nginx, so BACKEND_URL = domain (no port)
+  env_set .env BACKEND_URL "$CALLBACK_BASE"
+  ok "BACKEND_URL            ${GREEN}${BOLD}synced${NC} → ${CALLBACK_BASE} ${DIM}(nginx proxied)${NC}"
+else
+  env_set .env BACKEND_URL "$CALLBACK_BASE"
+  ok "BACKEND_URL            ${GREEN}${BOLD}synced${NC} → ${CALLBACK_BASE}"
+fi
+
+# --- NEXT_PUBLIC_API_URL ---
+if $IS_DOMAIN; then
+  env_set .env NEXT_PUBLIC_API_URL ""
+  ok "NEXT_PUBLIC_API_URL    ${DIM}empty (nginx proxied)${NC}"
+else
+  env_set .env NEXT_PUBLIC_API_URL "${CALLBACK_BASE}"
+  ok "NEXT_PUBLIC_API_URL    ${GREEN}${BOLD}synced${NC} → ${CALLBACK_BASE}"
+fi
+
+# --- GOOGLE_CALLBACK_URL ---
+CURRENT_GOOGLE_CB=$(env_get .env GOOGLE_CALLBACK_URL)
+if [[ "$CURRENT_GOOGLE_CB" != "$GOOGLE_REDIRECT" ]]; then
+  env_set .env GOOGLE_CALLBACK_URL "$GOOGLE_REDIRECT"
+  if [[ -n "$CURRENT_GOOGLE_CB" && "$CURRENT_GOOGLE_CB" != "http://localhost:4000/api/auth/google/callback" ]]; then
+    ENV_UPDATED+=("GOOGLE_CALLBACK_URL")
+  else
+    ENV_GENERATED+=("GOOGLE_CALLBACK_URL")
+  fi
+  ok "GOOGLE_CALLBACK_URL    ${GREEN}${BOLD}synced${NC}"
+else
+  ENV_PRESERVED+=("GOOGLE_CALLBACK_URL")
+  ok "GOOGLE_CALLBACK_URL    ${DIM}preserved${NC}"
+fi
+
+# --- DISCORD_CALLBACK_URL ---
+CURRENT_DISCORD_CB=$(env_get .env DISCORD_CALLBACK_URL)
+if [[ "$CURRENT_DISCORD_CB" != "$DISCORD_REDIRECT" ]]; then
+  env_set .env DISCORD_CALLBACK_URL "$DISCORD_REDIRECT"
+  if [[ -n "$CURRENT_DISCORD_CB" && "$CURRENT_DISCORD_CB" != "http://localhost:4000/api/auth/discord/callback" ]]; then
+    ENV_UPDATED+=("DISCORD_CALLBACK_URL")
+  else
+    ENV_GENERATED+=("DISCORD_CALLBACK_URL")
+  fi
+  ok "DISCORD_CALLBACK_URL   ${GREEN}${BOLD}synced${NC}"
+else
+  ENV_PRESERVED+=("DISCORD_CALLBACK_URL")
+  ok "DISCORD_CALLBACK_URL   ${DIM}preserved${NC}"
+fi
+
+# --- Display OAuth Redirect URLs prominently ---
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${MAGENTA}${BOLD}── OAuth Redirect URLs ──${NC}"
+echo -e "${GRAY}   │${NC}  ${DIM}Configure these in your OAuth provider dashboards:${NC}"
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${CYAN}Google${NC}   ${WHITE}${BOLD}${GOOGLE_REDIRECT}${NC}"
+echo -e "${GRAY}   │${NC}  ${DIM}         → https://console.cloud.google.com/apis/credentials${NC}"
+echo -e "${GRAY}   │${NC}  ${DIM}         → Authorized redirect URIs → Add URI → paste above URL${NC}"
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${CYAN}Discord${NC}  ${WHITE}${BOLD}${DISCORD_REDIRECT}${NC}"
+echo -e "${GRAY}   │${NC}  ${DIM}         → https://discord.com/developers/applications${NC}"
+echo -e "${GRAY}   │${NC}  ${DIM}         → OAuth2 → Redirects → Add Redirect → paste above URL${NC}"
+echo -e "${GRAY}   │${NC}"
+
 # ── Audit Summary ──────────────────────────────────────────
 echo -e "${GRAY}   │${NC}"
 echo -e "${GRAY}   │${NC}  ${MAGENTA}${BOLD}── Secret Audit Summary ──${NC}"
@@ -481,9 +604,9 @@ ok "Resolved via ${BOLD}${URL_SOURCE}${NC}"
 detail "Base URL: ${BASE_URL}"
 
 # Build access URLs
-# If domain (has no port in URL), use clean URLs (Nginx proxies)
+# If domain (nginx proxied), use clean URLs without ports
 # If IP/localhost, append ports
-if [[ "$BASE_URL" == https://* ]] || [[ "$URL_SOURCE" == "domain"* ]]; then
+if [[ "$URL_SOURCE" == "domain"* ]]; then
   FRONTEND_URL="${BASE_URL}"
   BACKEND_URL="${BASE_URL}/api"
   HEALTH_URL="${BASE_URL}/api/health"
@@ -684,9 +807,24 @@ echo -e "${GRAY}   ║${NC}                                                     
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}   ${WHITE}${BOLD}Next Steps${NC}                                                  ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${DIM}1. Edit .env to configure OAuth & Pterodactyl${NC}              ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${DIM}2. Restart: docker compose down && docker compose up -d${NC}    ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${DIM}3. View logs: docker compose logs -f backend${NC}               ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}1. Configure OAuth secrets in .env (client IDs/secrets)${NC}    ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}2. Configure Pterodactyl keys in .env${NC}                      ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}3. Restart: bash restart.sh${NC}                                ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}4. View logs: docker compose logs -f backend${NC}               ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╚══════════════════════════════════════════════════════════════╝${NC}"
+
+# ── OAuth URLs Quick Reference (outside box for readability) ─
+echo ""
+echo -e "${GRAY}   ┌─────────────────────────────────────────────────────────────${NC}"
+echo -e "${GRAY}   │${NC}  ${MAGENTA}${BOLD}⚡ OAuth Redirect URLs — Add these to your provider dashboards${NC}"
+echo -e "${GRAY}   ├─────────────────────────────────────────────────────────────${NC}"
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${CYAN}Google Console${NC}  ${DIM}(https://console.cloud.google.com/apis/credentials)${NC}"
+echo -e "${GRAY}   │${NC}  ${WHITE}${BOLD}→ ${GOOGLE_REDIRECT}${NC}"
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   │${NC}  ${CYAN}Discord Portal${NC}  ${DIM}(https://discord.com/developers/applications)${NC}"
+echo -e "${GRAY}   │${NC}  ${WHITE}${BOLD}→ ${DISCORD_REDIRECT}${NC}"
+echo -e "${GRAY}   │${NC}"
+echo -e "${GRAY}   └─────────────────────────────────────────────────────────────${NC}"
 echo ""
