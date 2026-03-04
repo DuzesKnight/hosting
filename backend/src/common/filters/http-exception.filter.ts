@@ -24,7 +24,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                 errors = (exResponse as any).errors;
             }
         } else if (exception instanceof Error) {
-            message = exception.message;
+            // Don't leak internal error details to clients
             this.logger.error(`Unhandled: ${exception.message}`, exception.stack);
         }
 

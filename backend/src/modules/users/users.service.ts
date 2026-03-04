@@ -48,8 +48,8 @@ export class UsersService {
         if (!user) throw new BadRequestException('User not found');
 
         // If user has an existing password (EMAIL provider), verify current password
-        if (user.password && currentPassword) {
-            const valid = await bcrypt.compare(currentPassword, user.password);
+        if (user.passwordHash && currentPassword) {
+            const valid = await bcrypt.compare(currentPassword, user.passwordHash);
             if (!valid) throw new BadRequestException('Current password is incorrect');
         }
 
@@ -58,7 +58,7 @@ export class UsersService {
         const hashed = await bcrypt.hash(newPassword, 12);
         await this.prisma.user.update({
             where: { id: userId },
-            data: { password: hashed },
+            data: { passwordHash: hashed },
         });
 
         return { message: 'Password updated successfully' };

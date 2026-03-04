@@ -19,6 +19,3 @@ __tests__
 test
 .eslintrc*
 .prettierrc*
-tsconfig.json
-tsconfig.build.json
-nest-cli.json

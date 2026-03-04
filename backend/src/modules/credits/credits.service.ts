@@ -65,7 +65,7 @@ export class CreditsService {
         return { earned: reward, total: await this.getCredits(userId) };
     }
 
-    getEarnConfig() {
+    async getEarnConfig() {
         // Ad settings are managed via Admin Panel (stored in AdminSetting table)
         // and fall back to .env values if not set in DB
         return this.buildEarnConfig();

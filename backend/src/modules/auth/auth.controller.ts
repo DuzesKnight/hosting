@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Body, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, Req, Res, UseGuards, BadRequestException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -65,6 +65,9 @@ export class AuthController {
     @Post('resend-verification')
     @Throttle({ default: { limit: 3, ttl: 60000 } })
     async resendVerification(@Body('email') email: string) {
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            throw new BadRequestException('Valid email is required');
+        }
         return this.authService.resendVerification(email);
     }
 
@@ -124,7 +127,7 @@ export class AuthController {
         return { user: this.authService.sanitizeUser(user) };
     }
 
-    @Get('logout')
+    @Post('logout')
     logout(@Res() res: Response) {
         res.clearCookie('token');
         res.json({ message: 'Logged out' });

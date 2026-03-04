@@ -172,8 +172,8 @@ export class ServersService {
                 ports: plan.ports,
                 databases: plan.databases,
                 expiresAt: plan.type === 'FREE'
-                    ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                    ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)  // Free: 7 days
+                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Paid: 30 days
             },
         });
 

@@ -58,7 +58,6 @@ export class VpsService {
                 bandwidth: true,
                 sellPrice: true,      // Customer sees YOUR price
                 // costPrice is NOT exposed — this is your real cost
-                datalixPlanName: false,
             },
         });
 
@@ -97,20 +96,25 @@ export class VpsService {
         if (!plan) throw new BadRequestException('Invalid VPS plan');
         if (!plan.isActive) throw new BadRequestException('This plan is no longer available');
 
-        // 2. Check & deduct user balance
-        const balance = await this.prisma.balance.findUnique({ where: { userId } });
-        const userBalance = balance?.amount || 0;
-        if (userBalance < plan.sellPrice) {
+        // 2. Check & deduct user balance (atomic transaction to prevent race conditions)
+        const deducted = await this.prisma.$transaction(async (tx) => {
+            const balance = await tx.balance.findUnique({ where: { userId } });
+            const userBalance = balance?.amount || 0;
+            if (userBalance < plan.sellPrice) {
+                return false;
+            }
+            await tx.balance.update({
+                where: { userId },
+                data: { amount: { decrement: plan.sellPrice } },
+            });
+            return true;
+        });
+
+        if (!deducted) {
             throw new BadRequestException(
-                `Insufficient balance. Required: ₹${plan.sellPrice}, Available: ₹${userBalance.toFixed(2)}`,
+                `Insufficient balance. Required: ₹${plan.sellPrice}`,
             );
         }
-
-        // 3. Deduct balance
-        await this.prisma.balance.update({
-            where: { userId },
-            data: { amount: { decrement: plan.sellPrice } },
-        });
 
         // 4. Record payment
         await this.prisma.payment.create({

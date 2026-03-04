@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Body, UseGuards, Param, BadRequestException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { Role } from '@prisma/client';
 import { BillingService } from './billing.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -24,7 +25,7 @@ export class BillingController {
 
     @Post('balance/add')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles('ADMIN')
+    @Roles(Role.ADMIN)
     addBalance(@CurrentUser() user: any, @Body('amount') amount: number) {
         if (!amount || amount <= 0 || amount > 100000) {
             throw new BadRequestException('Amount must be between 1 and 100000');

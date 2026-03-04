@@ -92,7 +92,9 @@ export class BillingService {
             },
         });
 
-        await this.handlePaymentSuccess(payment);
+        // Re-fetch updated payment to pass correct status to handler
+        const updatedPayment = await this.prisma.payment.findUnique({ where: { id: payment.id } });
+        await this.handlePaymentSuccess(updatedPayment);
         return { success: true };
     }
 
@@ -179,7 +181,9 @@ export class BillingService {
                     where: { id: payment.id },
                     data: { status: PaymentStatus.COMPLETED },
                 });
-                await this.handlePaymentSuccess(payment);
+                // Re-fetch updated payment to pass correct status to handler
+                const updatedPayment = await this.prisma.payment.findUnique({ where: { id: payment.id } });
+                await this.handlePaymentSuccess(updatedPayment);
             }
 
             return { success: true };
@@ -252,14 +256,17 @@ export class BillingService {
     }
 
     async deductBalance(userId: string, amount: number): Promise<boolean> {
-        const balance = await this.prisma.balance.findUnique({ where: { userId } });
-        if (!balance || balance.amount < amount) return false;
+        // Use interactive transaction to prevent race conditions (negative balance)
+        return this.prisma.$transaction(async (tx) => {
+            const balance = await tx.balance.findUnique({ where: { userId } });
+            if (!balance || balance.amount < amount) return false;
 
-        await this.prisma.balance.update({
-            where: { userId },
-            data: { amount: { decrement: amount } },
+            await tx.balance.update({
+                where: { userId },
+                data: { amount: { decrement: amount } },
+            });
+            return true;
         });
-        return true;
     }
 
     async payWithBalance(userId: string, amount: number, serverId?: string): Promise<any> {

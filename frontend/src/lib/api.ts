@@ -13,7 +13,7 @@ export const api = axios.create({
 // Auth
 export const authApi = {
     getMe: () => api.get('/auth/me'),
-    logout: () => api.get('/auth/logout'),
+    logout: () => api.post('/auth/logout'),
     googleUrl: `${API_URL}/api/auth/google`,
     discordUrl: `${API_URL}/api/auth/discord`,
     register: (data: { email: string; name: string; password: string }) => api.post('/auth/register', data),

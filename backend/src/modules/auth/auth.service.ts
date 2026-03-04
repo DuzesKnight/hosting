@@ -501,9 +501,13 @@ export class AuthService {
     // HELPERS
     // ============================================================
     signToken(user: any): string {
+        const secret = this.config.get<string>('JWT_SECRET');
+        if (!secret) {
+            throw new Error('JWT_SECRET environment variable is not configured');
+        }
         return jwt.sign(
             { sub: user.id, email: user.email, role: user.role },
-            this.config.get<string>('JWT_SECRET', ''),
+            secret,
             { expiresIn: this.config.get('JWT_EXPIRY', '7d') },
         );
     }
