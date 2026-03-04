@@ -53,6 +53,11 @@ export const serversApi = {
     reinstall: (id: string) => api.post(`/servers/${id}/reinstall`),
 };
 
+// Public stats (no auth)
+export const statsApi = {
+    public: () => api.get('/stats'),
+};
+
 // Plans
 export const plansApi = {
     list: () => api.get('/plans'),

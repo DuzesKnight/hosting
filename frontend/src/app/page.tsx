@@ -2,132 +2,335 @@
 
 import { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Float, Stars, Trail } from '@react-three/drei';
 import * as THREE from 'three';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import Link from 'next/link';
 import { Shield, Zap, Server, CreditCard, Puzzle, Globe, Menu, X, ChevronDown, Users, Clock, Sparkles } from 'lucide-react';
-import { plansApi } from '@/lib/api';
+import { plansApi, statsApi } from '@/lib/api';
 
 // ═══════════════ 3D SCENE COMPONENTS ═══════════════
 
-function NebulaClouds() {
-    const cloudsRef = useRef<THREE.Group>(null);
-    useFrame((state) => {
-        if (!cloudsRef.current) return;
-        cloudsRef.current.rotation.y = state.clock.elapsedTime * 0.015;
-        cloudsRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.01) * 0.05;
-    });
+/* ── Rotating double-helix network with energy pulses ── */
+function HelixNetwork() {
+    const linesRef = useRef<THREE.LineSegments>(null);
+    const nodesRef = useRef<THREE.Points>(null);
+    const pulseRef = useRef<THREE.Points>(null);
+    const helixPoints = 120;
+    const turns = 4;
+    const radius = 3;
+    const height = 40;
+    const pulseCount = 24;
 
-    const clouds = useMemo(() => {
-        const items: { pos: [number, number, number]; scale: number; color: string; speed: number }[] = [];
-        for (let i = 0; i < 8; i++) {
-            const angle = (i / 8) * Math.PI * 2;
-            const r = 15 + Math.random() * 10;
-            items.push({
-                pos: [Math.cos(angle) * r, (Math.random() - 0.5) * 8, Math.sin(angle) * r - 10],
-                scale: 3 + Math.random() * 5,
-                color: i % 3 === 0 ? '#00d4ff' : i % 3 === 1 ? '#7c3aed' : '#3b82f6',
-                speed: 0.3 + Math.random() * 0.7,
-            });
+    const { nodePositions, nodeColors, linePositions, lineColors, pulsePositions, pulseData } = useMemo(() => {
+        const nPos = new Float32Array(helixPoints * 2 * 3);
+        const nCol = new Float32Array(helixPoints * 2 * 3);
+        const lPos: number[] = [];
+        const lCol: number[] = [];
+        const pPos = new Float32Array(pulseCount * 3);
+        const pData = new Float32Array(pulseCount * 2);
+
+        const c1 = new THREE.Color('#00d4ff');
+        const c2 = new THREE.Color('#7c3aed');
+        const c3 = new THREE.Color('#3b82f6');
+
+        for (let i = 0; i < helixPoints; i++) {
+            const t = i / helixPoints;
+            const angle = t * Math.PI * 2 * turns;
+            const y = (t - 0.5) * height;
+
+            const x1 = Math.cos(angle) * radius;
+            const z1 = Math.sin(angle) * radius;
+            const x2 = Math.cos(angle + Math.PI) * radius;
+            const z2 = Math.sin(angle + Math.PI) * radius;
+
+            nPos[i * 6] = x1;
+            nPos[i * 6 + 1] = y;
+            nPos[i * 6 + 2] = z1;
+            nPos[i * 6 + 3] = x2;
+            nPos[i * 6 + 4] = y;
+            nPos[i * 6 + 5] = z2;
+
+            const color = new THREE.Color();
+            color.lerpColors(c1, c2, t);
+            nCol[i * 6] = color.r; nCol[i * 6 + 1] = color.g; nCol[i * 6 + 2] = color.b;
+            const color2 = new THREE.Color();
+            color2.lerpColors(c3, c1, t);
+            nCol[i * 6 + 3] = color2.r; nCol[i * 6 + 4] = color2.g; nCol[i * 6 + 5] = color2.b;
+
+            /* Cross-bridge rungs every 6 nodes */
+            if (i % 6 === 0) {
+                lPos.push(x1, y, z1, x2, y, z2);
+                const bridgeCol = new THREE.Color();
+                bridgeCol.lerpColors(c1, c3, t);
+                lCol.push(bridgeCol.r, bridgeCol.g, bridgeCol.b, bridgeCol.r, bridgeCol.g, bridgeCol.b);
+            }
+
+            /* Strand connections along each helix */
+            if (i > 0) {
+                const prev = i - 1;
+                const pt = prev / helixPoints;
+                const pa = pt * Math.PI * 2 * turns;
+                const py = (pt - 0.5) * height;
+                lPos.push(Math.cos(pa) * radius, py, Math.sin(pa) * radius, x1, y, z1);
+                lCol.push(color.r, color.g, color.b, color.r, color.g, color.b);
+                lPos.push(Math.cos(pa + Math.PI) * radius, py, Math.sin(pa + Math.PI) * radius, x2, y, z2);
+                lCol.push(color2.r, color2.g, color2.b, color2.r, color2.g, color2.b);
+            }
         }
-        return items;
+
+        for (let i = 0; i < pulseCount; i++) {
+            pPos[i * 3] = 0; pPos[i * 3 + 1] = 0; pPos[i * 3 + 2] = 0;
+            pData[i * 2] = Math.random();
+            pData[i * 2 + 1] = i % 2 === 0 ? 0 : 1;
+        }
+
+        return {
+            nodePositions: nPos,
+            nodeColors: nCol,
+            linePositions: new Float32Array(lPos),
+            lineColors: new Float32Array(lCol),
+            pulsePositions: pPos,
+            pulseData: pData,
+        };
     }, []);
 
+    useFrame((state) => {
+        const t = state.clock.elapsedTime;
+
+        if (linesRef.current) {
+            linesRef.current.rotation.y = t * 0.06;
+            const mat = linesRef.current.material as THREE.LineBasicMaterial;
+            mat.opacity = 0.12 + Math.sin(t * 0.3) * 0.04;
+        }
+        if (nodesRef.current) {
+            nodesRef.current.rotation.y = t * 0.06;
+            const mat = nodesRef.current.material as THREE.PointsMaterial;
+            mat.opacity = 0.65 + Math.sin(t * 0.5) * 0.15;
+        }
+
+        /* Animate energy pulses along helix strands */
+        if (pulseRef.current) {
+            pulseRef.current.rotation.y = t * 0.06;
+            const arr = pulseRef.current.geometry.attributes.position.array as Float32Array;
+            for (let i = 0; i < pulseCount; i++) {
+                const progress = (pulseData[i * 2] + t * 0.08) % 1;
+                const strand = pulseData[i * 2 + 1];
+                const angle = progress * Math.PI * 2 * turns;
+                const offset = strand === 0 ? 0 : Math.PI;
+                arr[i * 3] = Math.cos(angle + offset) * radius;
+                arr[i * 3 + 1] = (progress - 0.5) * height;
+                arr[i * 3 + 2] = Math.sin(angle + offset) * radius;
+            }
+            (pulseRef.current.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        }
+    });
+
     return (
-        <group ref={cloudsRef}>
-            {clouds.map((c, i) => (
-                <mesh key={i} position={c.pos}>
-                    <sphereGeometry args={[c.scale, 16, 16]} />
-                    <meshBasicMaterial color={c.color} transparent opacity={0.025} depthWrite={false} />
-                </mesh>
-            ))}
+        <group position={[5, 0, -8]} rotation={[0.15, -0.3, 0.12]}>
+            <lineSegments ref={linesRef}>
+                <bufferGeometry>
+                    <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
+                    <bufferAttribute attach="attributes-color" args={[lineColors, 3]} />
+                </bufferGeometry>
+                <lineBasicMaterial vertexColors transparent opacity={0.14} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </lineSegments>
+            <points ref={nodesRef}>
+                <bufferGeometry>
+                    <bufferAttribute attach="attributes-position" args={[nodePositions, 3]} />
+                    <bufferAttribute attach="attributes-color" args={[nodeColors, 3]} />
+                </bufferGeometry>
+                <pointsMaterial size={0.12} vertexColors transparent opacity={0.7} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
+            </points>
+            <points ref={pulseRef}>
+                <bufferGeometry>
+                    <bufferAttribute attach="attributes-position" args={[pulsePositions, 3]} />
+                </bufferGeometry>
+                <pointsMaterial size={0.3} color="#00d4ff" transparent opacity={0.9} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
+            </points>
         </group>
     );
 }
 
-function ShootingStar({ delay }: { delay: number }) {
-    const ref = useRef<THREE.Mesh>(null);
-    const [active, setActive] = useState(false);
-    const startPos = useMemo(() => new THREE.Vector3(
-        (Math.random() - 0.5) * 40,
-        10 + Math.random() * 15,
-        -20 - Math.random() * 20,
-    ), []);
-    const velocity = useMemo(() => new THREE.Vector3(
-        -0.3 - Math.random() * 0.4,
-        -0.15 - Math.random() * 0.2,
-        0.1,
-    ), []);
+/* ── Floating connected node constellation ── */
+function NodeConstellation() {
+    const groupRef = useRef<THREE.Group>(null);
+    const linesRef = useRef<THREE.LineSegments>(null);
+    const pointsRef = useRef<THREE.Points>(null);
+    const nodeCount = 60;
+    const maxDist = 6;
+
+    const { positions, basePositions, lineData, lineColors, pointColors } = useMemo(() => {
+        const pos = new Float32Array(nodeCount * 3);
+        const bpos = new Float32Array(nodeCount * 3);
+        const pcol = new Float32Array(nodeCount * 3);
+        const palette = [new THREE.Color('#00d4ff'), new THREE.Color('#7c3aed'), new THREE.Color('#3b82f6'), new THREE.Color('#06b6d4')];
+
+        for (let i = 0; i < nodeCount; i++) {
+            const x = (Math.random() - 0.5) * 30;
+            const y = (Math.random() - 0.5) * 20;
+            const z = (Math.random() - 0.5) * 20 - 10;
+            pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+            bpos[i * 3] = x; bpos[i * 3 + 1] = y; bpos[i * 3 + 2] = z;
+            const c = palette[Math.floor(Math.random() * palette.length)];
+            pcol[i * 3] = c.r; pcol[i * 3 + 1] = c.g; pcol[i * 3 + 2] = c.b;
+        }
+
+        const lineVerts: number[] = [];
+        const lColors: number[] = [];
+        for (let i = 0; i < nodeCount; i++) {
+            for (let j = i + 1; j < nodeCount; j++) {
+                const dx = bpos[i * 3] - bpos[j * 3];
+                const dy = bpos[i * 3 + 1] - bpos[j * 3 + 1];
+                const dz = bpos[i * 3 + 2] - bpos[j * 3 + 2];
+                const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (d < maxDist) {
+                    lineVerts.push(bpos[i * 3], bpos[i * 3 + 1], bpos[i * 3 + 2]);
+                    lineVerts.push(bpos[j * 3], bpos[j * 3 + 1], bpos[j * 3 + 2]);
+                    const alpha = 1 - d / maxDist;
+                    const lc = new THREE.Color('#3b82f6');
+                    lColors.push(lc.r * alpha, lc.g * alpha, lc.b * alpha);
+                    lColors.push(lc.r * alpha, lc.g * alpha, lc.b * alpha);
+                }
+            }
+        }
+        return {
+            positions: pos,
+            basePositions: bpos,
+            lineData: new Float32Array(lineVerts),
+            lineColors: new Float32Array(lColors),
+            pointColors: pcol,
+        };
+    }, []);
 
     useFrame((state) => {
-        if (!ref.current) return;
         const t = state.clock.elapsedTime;
-        const cycle = (t + delay) % (8 + delay * 2);
-        if (cycle < 2.5) {
-            if (!active) setActive(true);
-            ref.current.visible = true;
-            const progress = cycle / 2.5;
-            ref.current.position.set(
-                startPos.x + velocity.x * progress * 40,
-                startPos.y + velocity.y * progress * 40,
-                startPos.z + velocity.z * progress * 40,
-            );
-            const mat = ref.current.material as THREE.MeshBasicMaterial;
-            mat.opacity = progress < 0.1 ? progress * 10 : progress > 0.7 ? (1 - progress) / 0.3 : 1;
-        } else {
-            ref.current.visible = false;
-            if (active) setActive(false);
+        if (groupRef.current) {
+            groupRef.current.rotation.y = t * 0.02;
+        }
+        if (pointsRef.current) {
+            const arr = pointsRef.current.geometry.attributes.position.array as Float32Array;
+            for (let i = 0; i < nodeCount; i++) {
+                arr[i * 3] = basePositions[i * 3] + Math.sin(t * 0.3 + i * 0.5) * 0.4;
+                arr[i * 3 + 1] = basePositions[i * 3 + 1] + Math.cos(t * 0.25 + i * 0.7) * 0.3;
+            }
+            (pointsRef.current.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
         }
     });
 
     return (
-        <Trail width={0.8} length={8} color="#00d4ff" attenuation={(w) => w * w}>
-            <mesh ref={ref} visible={false}>
-                <sphereGeometry args={[0.06, 8, 8]} />
-                <meshBasicMaterial color="#ffffff" transparent opacity={1} />
-            </mesh>
-        </Trail>
+        <group ref={groupRef}>
+            <lineSegments ref={linesRef}>
+                <bufferGeometry>
+                    <bufferAttribute attach="attributes-position" args={[lineData, 3]} />
+                    <bufferAttribute attach="attributes-color" args={[lineColors, 3]} />
+                </bufferGeometry>
+                <lineBasicMaterial vertexColors transparent opacity={0.08} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </lineSegments>
+            <points ref={pointsRef}>
+                <bufferGeometry>
+                    <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+                    <bufferAttribute attach="attributes-color" args={[pointColors, 3]} />
+                </bufferGeometry>
+                <pointsMaterial size={0.15} vertexColors transparent opacity={0.6} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
+            </points>
+        </group>
     );
 }
 
-function CosmicDust() {
-    const count = 3000;
-    const ref = useRef<THREE.Points>(null);
-
-    const [positions, sizes, colors] = useMemo(() => {
-        const pos = new Float32Array(count * 3);
-        const sz = new Float32Array(count);
-        const col = new Float32Array(count * 3);
-        const colorPalette = [
-            new THREE.Color('#00d4ff'),
-            new THREE.Color('#7c3aed'),
-            new THREE.Color('#3b82f6'),
-            new THREE.Color('#ffffff'),
-        ];
-        for (let i = 0; i < count; i++) {
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const r = 5 + Math.random() * 45;
-            pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-            pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-            pos[i * 3 + 2] = r * Math.cos(phi) - 10;
-            sz[i] = Math.random() * 0.08 + 0.01;
-            const c = colorPalette[Math.floor(Math.random() * colorPalette.length)];
-            col[i * 3] = c.r;
-            col[i * 3 + 1] = c.g;
-            col[i * 3 + 2] = c.b;
-        }
-        return [pos, sz, col];
-    }, []);
+/* ── Central pulsing energy core ── */
+function EnergyCore() {
+    const ringRef1 = useRef<THREE.Mesh>(null);
+    const ringRef2 = useRef<THREE.Mesh>(null);
+    const ringRef3 = useRef<THREE.Mesh>(null);
+    const coreRef = useRef<THREE.Mesh>(null);
 
     useFrame((state) => {
+        const t = state.clock.elapsedTime;
+        if (ringRef1.current) {
+            ringRef1.current.rotation.x = t * 0.5;
+            ringRef1.current.rotation.z = t * 0.2;
+            const s = 1 + Math.sin(t * 0.8) * 0.1;
+            ringRef1.current.scale.set(s, s, s);
+        }
+        if (ringRef2.current) {
+            ringRef2.current.rotation.y = t * 0.4;
+            ringRef2.current.rotation.x = t * 0.3;
+            const s = 1 + Math.cos(t * 0.6) * 0.08;
+            ringRef2.current.scale.set(s, s, s);
+        }
+        if (ringRef3.current) {
+            ringRef3.current.rotation.z = t * 0.35;
+            ringRef3.current.rotation.y = t * 0.25;
+        }
+        if (coreRef.current) {
+            const pulse = 0.06 + Math.sin(t * 1.2) * 0.025;
+            const mat = coreRef.current.material as THREE.MeshBasicMaterial;
+            mat.opacity = pulse;
+            const cs = 1 + Math.sin(t * 1.5) * 0.15;
+            coreRef.current.scale.set(cs, cs, cs);
+        }
+    });
+
+    return (
+        <group position={[-4, 1, -12]}>
+            <mesh ref={ringRef1}>
+                <torusGeometry args={[2.5, 0.02, 16, 100]} />
+                <meshBasicMaterial color="#00d4ff" transparent opacity={0.18} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </mesh>
+            <mesh ref={ringRef2}>
+                <torusGeometry args={[2.0, 0.015, 16, 100]} />
+                <meshBasicMaterial color="#7c3aed" transparent opacity={0.15} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </mesh>
+            <mesh ref={ringRef3}>
+                <torusGeometry args={[1.5, 0.012, 16, 100]} />
+                <meshBasicMaterial color="#3b82f6" transparent opacity={0.12} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </mesh>
+            <mesh ref={coreRef}>
+                <sphereGeometry args={[1.2, 32, 32]} />
+                <meshBasicMaterial color="#00d4ff" transparent opacity={0.06} blending={THREE.AdditiveBlending} depthWrite={false} />
+            </mesh>
+        </group>
+    );
+}
+
+/* ── Drifting embers / data-particles ── */
+function DataEmbers() {
+    const count = 800;
+    const ref = useRef<THREE.Points>(null);
+
+    const { positions, velocities, colors } = useMemo(() => {
+        const pos = new Float32Array(count * 3);
+        const vel = new Float32Array(count * 3);
+        const col = new Float32Array(count * 3);
+        const palette = [new THREE.Color('#00d4ff'), new THREE.Color('#7c3aed'), new THREE.Color('#3b82f6'), new THREE.Color('#e2e8f0')];
+
+        for (let i = 0; i < count; i++) {
+            pos[i * 3] = (Math.random() - 0.5) * 60;
+            pos[i * 3 + 1] = (Math.random() - 0.5) * 50;
+            pos[i * 3 + 2] = Math.random() * -50 - 5;
+            vel[i * 3] = (Math.random() - 0.5) * 0.005;
+            vel[i * 3 + 1] = 0.004 + Math.random() * 0.008;
+            vel[i * 3 + 2] = (Math.random() - 0.5) * 0.003;
+            const c = palette[Math.floor(Math.random() * palette.length)];
+            col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+        }
+        return { positions: pos, velocities: vel, colors: col };
+    }, []);
+
+    useFrame(() => {
         if (!ref.current) return;
-        ref.current.rotation.y += 0.0002;
-        ref.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.02) * 0.02;
-        // Twinkle effect via uniform
-        const mat = ref.current.material as THREE.PointsMaterial;
-        mat.opacity = 0.65 + Math.sin(state.clock.elapsedTime * 0.5) * 0.1;
+        const arr = ref.current.geometry.attributes.position.array as Float32Array;
+        for (let i = 0; i < count; i++) {
+            arr[i * 3] += velocities[i * 3];
+            arr[i * 3 + 1] += velocities[i * 3 + 1];
+            arr[i * 3 + 2] += velocities[i * 3 + 2];
+            if (arr[i * 3 + 1] > 25) {
+                arr[i * 3] = (Math.random() - 0.5) * 60;
+                arr[i * 3 + 1] = -25;
+                arr[i * 3 + 2] = Math.random() * -50 - 5;
+            }
+        }
+        (ref.current.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     });
 
     return (
@@ -136,59 +339,8 @@ function CosmicDust() {
                 <bufferAttribute attach="attributes-position" args={[positions, 3]} />
                 <bufferAttribute attach="attributes-color" args={[colors, 3]} />
             </bufferGeometry>
-            <pointsMaterial
-                size={0.06}
-                vertexColors
-                transparent
-                opacity={0.7}
-                sizeAttenuation
-                depthWrite={false}
-                blending={THREE.AdditiveBlending}
-            />
+            <pointsMaterial size={0.035} vertexColors transparent opacity={0.5} sizeAttenuation depthWrite={false} blending={THREE.AdditiveBlending} />
         </points>
-    );
-}
-
-function OrbitRing({ radius, speed, color, tilt }: { radius: number; speed: number; color: string; tilt: number }) {
-    const ref = useRef<THREE.Mesh>(null);
-    useFrame((state) => {
-        if (!ref.current) return;
-        ref.current.rotation.z = state.clock.elapsedTime * speed;
-    });
-
-    return (
-        <group rotation={[tilt, 0, 0]}>
-            <mesh ref={ref} position={[0, 0, -8]}>
-                <torusGeometry args={[radius, 0.015, 16, 100]} />
-                <meshBasicMaterial color={color} transparent opacity={0.15} />
-            </mesh>
-        </group>
-    );
-}
-
-function FloatingGem({ position, color, speed = 1 }: { position: [number, number, number]; color: string; speed?: number }) {
-    const ref = useRef<THREE.Mesh>(null);
-    useFrame((state) => {
-        if (!ref.current) return;
-        ref.current.rotation.x = state.clock.elapsedTime * speed * 0.3;
-        ref.current.rotation.y = state.clock.elapsedTime * speed * 0.5;
-        ref.current.position.y = position[1] + Math.sin(state.clock.elapsedTime * speed * 0.7) * 0.5;
-    });
-
-    return (
-        <Float speed={speed * 0.8} rotationIntensity={0.3} floatIntensity={1.5}>
-            <mesh ref={ref} position={position}>
-                <octahedronGeometry args={[0.4, 0]} />
-                <meshStandardMaterial
-                    color={color}
-                    transparent
-                    opacity={0.4}
-                    wireframe
-                    emissive={color}
-                    emissiveIntensity={0.3}
-                />
-            </mesh>
-        </Float>
     );
 }
 
@@ -196,9 +348,9 @@ function CameraRig() {
     const { camera } = useThree();
     useFrame((state) => {
         const t = state.clock.elapsedTime;
-        camera.position.x = Math.sin(t * 0.05) * 0.5;
-        camera.position.y = Math.cos(t * 0.03) * 0.3;
-        camera.lookAt(0, 0, -5);
+        camera.position.x = Math.sin(t * 0.04) * 0.8;
+        camera.position.y = Math.cos(t * 0.025) * 0.4;
+        camera.lookAt(0, 0, -8);
     });
     return null;
 }
@@ -206,41 +358,24 @@ function CameraRig() {
 function HeroScene() {
     return (
         <Canvas
-            camera={{ position: [0, 0, 8], fov: 60 }}
+            camera={{ position: [0, 0, 10], fov: 60 }}
             className="!absolute inset-0"
             dpr={[1, 1.5]}
             gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
             fallback={<div className="absolute inset-0 bg-dark" />}
         >
             <color attach="background" args={['#0a0e17']} />
-            <fog attach="fog" args={['#0a0e17', 30, 60]} />
+            <fog attach="fog" args={['#0a0e17', 30, 65]} />
 
-            <ambientLight intensity={0.15} />
-            <pointLight position={[10, 10, 10]} intensity={0.8} color="#00d4ff" distance={50} />
-            <pointLight position={[-10, -5, -10]} intensity={0.5} color="#7c3aed" distance={40} />
-            <pointLight position={[0, 15, -20]} intensity={0.3} color="#3b82f6" distance={60} />
+            <ambientLight intensity={0.08} />
+            <pointLight position={[10, 10, 5]} intensity={0.4} color="#00d4ff" distance={60} />
+            <pointLight position={[-10, -5, -10]} intensity={0.25} color="#7c3aed" distance={50} />
+            <pointLight position={[0, 8, -20]} intensity={0.2} color="#3b82f6" distance={60} />
 
-            <Stars radius={80} depth={60} count={4000} factor={3} saturation={0.2} fade speed={0.5} />
-            <CosmicDust />
-            <NebulaClouds />
-
-            {/* Shooting stars with staggered delays */}
-            <ShootingStar delay={0} />
-            <ShootingStar delay={3} />
-            <ShootingStar delay={6} />
-            <ShootingStar delay={9} />
-
-            {/* Orbital rings */}
-            <OrbitRing radius={6} speed={0.08} color="#00d4ff" tilt={0.5} />
-            <OrbitRing radius={9} speed={-0.05} color="#7c3aed" tilt={-0.3} />
-            <OrbitRing radius={12} speed={0.03} color="#3b82f6" tilt={0.8} />
-
-            {/* Floating geometric shapes */}
-            <FloatingGem position={[-4, 2, -5]} color="#00d4ff" speed={1.2} />
-            <FloatingGem position={[4, -1, -7]} color="#7c3aed" speed={0.8} />
-            <FloatingGem position={[1, 3, -9]} color="#3b82f6" speed={1} />
-            <FloatingGem position={[-3, -2.5, -4]} color="#00d4ff" speed={0.6} />
-            <FloatingGem position={[5, 1, -11]} color="#7c3aed" speed={1.4} />
+            <HelixNetwork />
+            <NodeConstellation />
+            <EnergyCore />
+            <DataEmbers />
 
             <CameraRig />
         </Canvas>
@@ -277,11 +412,11 @@ const features = [
     { icon: Globe, title: 'Global Network', desc: 'Multiple regions worldwide for the lowest possible latency.', color: 'from-teal-500 to-cyan-500' },
 ];
 
-const stats = [
-    { icon: Server, value: '500', suffix: '+', label: 'Active Servers' },
-    { icon: Users, value: '2000', suffix: '+', label: 'Happy Players' },
-    { icon: Clock, value: '99.9', suffix: '%', label: 'Uptime SLA' },
-    { icon: Sparkles, value: '10', suffix: 'K+', label: 'Plugins Available' },
+const defaultStats = [
+    { icon: Server, key: 'activeServers', value: '0', suffix: '+', label: 'Active Servers' },
+    { icon: Users, key: 'totalUsers', value: '0', suffix: '+', label: 'Happy Players' },
+    { icon: Clock, key: 'uptime', value: '99.9', suffix: '%', label: 'Uptime SLA' },
+    { icon: Sparkles, key: 'totalPlugins', value: '10', suffix: 'K+', label: 'Plugins Available' },
 ];
 
 const planColors = [
@@ -295,6 +430,7 @@ const planColors = [
 
 export default function LandingPage() {
     const [plans, setPlans] = useState<any[]>([]);
+    const [stats, setStats] = useState(defaultStats);
     const [mobileNav, setMobileNav] = useState(false);
     const { scrollYProgress } = useScroll();
     const navBg = useTransform(scrollYProgress, [0, 0.05], [0, 1]);
@@ -304,6 +440,22 @@ export default function LandingPage() {
             const data = r.data || [];
             setPlans(data.filter((p: any) => p.type !== 'CUSTOM').slice(0, 4));
         }).catch(() => { });
+
+        // Fetch real-time stats
+        const fetchStats = () => {
+            statsApi.public().then((r) => {
+                const d = r.data;
+                setStats([
+                    { icon: Server, key: 'activeServers', value: String(d.activeServers || 0), suffix: '+', label: 'Active Servers' },
+                    { icon: Users, key: 'totalUsers', value: String(d.totalUsers || 0), suffix: '+', label: 'Happy Players' },
+                    { icon: Clock, key: 'uptime', value: String(d.uptime || '99.9'), suffix: '%', label: 'Uptime SLA' },
+                    { icon: Sparkles, key: 'totalPlugins', value: String(Math.floor(parseInt(d.totalPlugins || '10000') / 1000)), suffix: 'K+', label: 'Plugins Available' },
+                ]);
+            }).catch(() => { });
+        };
+        fetchStats();
+        const interval = setInterval(fetchStats, 60000); // refresh every 60s
+        return () => clearInterval(interval);
     }, []);
 
     const scrollToSection = useCallback((id: string) => {
@@ -432,7 +584,7 @@ export default function LandingPage() {
                         className="glass-card p-6 grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-4"
                     >
                         {stats.map((s) => (
-                            <div key={s.label} className="text-center">
+                            <div key={s.key} className="text-center">
                                 <div className="flex items-center justify-center gap-2 mb-1">
                                     <s.icon className="w-4 h-4 text-primary" />
                                     <span className="text-2xl md:text-3xl font-display font-bold gradient-text">

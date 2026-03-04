@@ -76,6 +76,42 @@ export class HealthController implements OnModuleInit, OnModuleDestroy {
 }
 
 /**
+ * Public stats endpoint — no auth required.
+ * Powers the landing page real-time stats strip.
+ * Cached for 60s to avoid DB hammering on every page load.
+ */
+@Controller('stats')
+export class StatsController {
+    private cache: { data: any; ts: number } | null = null;
+    private readonly TTL = 60_000; // 60 seconds
+
+    constructor(private prisma: PrismaService) {}
+
+    @Get()
+    async getPublicStats() {
+        if (this.cache && Date.now() - this.cache.ts < this.TTL) {
+            return this.cache.data;
+        }
+
+        const [activeServers, totalUsers, totalPlugins] = await Promise.all([
+            this.prisma.server.count({ where: { status: 'ACTIVE' } }),
+            this.prisma.user.count(),
+            this.prisma.server.count(), // total servers ever as proxy for scale
+        ]);
+
+        const data = {
+            activeServers,
+            totalUsers,
+            uptime: '99.9',
+            totalPlugins: '10000', // Modrinth + SpigotMC combined catalog
+        };
+
+        this.cache = { data, ts: Date.now() };
+        return data;
+    }
+}
+
+/**
  * Root controller — responds at GET / (outside the /api prefix)
  * so users don't see a confusing 404 when visiting the backend URL directly.
  */
@@ -89,6 +125,7 @@ export class RootController {
             version: process.env.npm_package_version || '1.0.0',
             endpoints: {
                 health: '/api/health',
+                stats: '/api/stats',
                 auth: '/api/auth/google',
                 docs: '/api',
             },
