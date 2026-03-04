@@ -129,7 +129,13 @@ export class AuthController {
 
     @Post('logout')
     logout(@Res() res: Response) {
-        res.clearCookie('token');
+        const appUrl = this.config.get('APP_URL', 'http://localhost:3000');
+        const isHttps = appUrl.startsWith('https://');
+        res.clearCookie('token', {
+            httpOnly: true,
+            secure: isHttps,
+            sameSite: 'lax',
+        });
         res.json({ message: 'Logged out' });
     }
 

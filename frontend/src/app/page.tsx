@@ -5,8 +5,9 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import Link from 'next/link';
-import { Shield, Zap, Server, CreditCard, Puzzle, Globe, Menu, X, ChevronDown, Users, Clock, Sparkles } from 'lucide-react';
+import { Shield, Zap, Server, CreditCard, Puzzle, Globe, Menu, X, ChevronDown, Users, Clock, Sparkles, LayoutDashboard } from 'lucide-react';
 import { plansApi, statsApi } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 // ═══════════════ 3D SCENE COMPONENTS ═══════════════
 
@@ -429,6 +430,7 @@ const planColors = [
 // ═══════════════ MAIN PAGE ═══════════════
 
 export default function LandingPage() {
+    const { user: authUser } = useAuth();
     const [plans, setPlans] = useState<any[]>([]);
     const [stats, setStats] = useState(defaultStats);
     const [mobileNav, setMobileNav] = useState(false);
@@ -484,7 +486,13 @@ export default function LandingPage() {
                         <button onClick={() => scrollToSection('features')} className="text-gray-400 hover:text-white transition-colors text-sm">Features</button>
                         <button onClick={() => scrollToSection('pricing')} className="text-gray-400 hover:text-white transition-colors text-sm">Pricing</button>
                         <button onClick={() => scrollToSection('about')} className="text-gray-400 hover:text-white transition-colors text-sm">About</button>
-                        <Link href="/login" className="btn-primary text-sm px-5 py-2">Get Started</Link>
+                        {authUser ? (
+                            <Link href="/dashboard" className="btn-primary text-sm px-5 py-2 inline-flex items-center gap-2">
+                                <LayoutDashboard className="w-4 h-4" /> Dashboard
+                            </Link>
+                        ) : (
+                            <Link href="/login" className="btn-primary text-sm px-5 py-2">Get Started</Link>
+                        )}
                     </div>
 
                     {/* Mobile hamburger */}
@@ -509,7 +517,13 @@ export default function LandingPage() {
                             <button onClick={() => scrollToSection('features')} className="block w-full text-left text-gray-300 hover:text-white py-2 text-sm">Features</button>
                             <button onClick={() => scrollToSection('pricing')} className="block w-full text-left text-gray-300 hover:text-white py-2 text-sm">Pricing</button>
                             <button onClick={() => scrollToSection('about')} className="block w-full text-left text-gray-300 hover:text-white py-2 text-sm">About</button>
-                            <Link href="/login" className="btn-primary text-sm px-5 py-2 block text-center mt-2" onClick={() => setMobileNav(false)}>Get Started</Link>
+                            {authUser ? (
+                                <Link href="/dashboard" className="btn-primary text-sm px-5 py-2 block text-center mt-2" onClick={() => setMobileNav(false)}>
+                                    <span className="inline-flex items-center gap-2 justify-center"><LayoutDashboard className="w-4 h-4" /> Dashboard</span>
+                                </Link>
+                            ) : (
+                                <Link href="/login" className="btn-primary text-sm px-5 py-2 block text-center mt-2" onClick={() => setMobileNav(false)}>Get Started</Link>
+                            )}
                         </div>
                     </motion.div>
                 )}
@@ -544,9 +558,15 @@ export default function LandingPage() {
                             with automated billing, plugin management, and more.
                         </p>
                         <div className="flex flex-wrap gap-4">
-                            <Link href="/login" className="btn-primary group">
-                                Start Free <span className="inline-block transition-transform group-hover:translate-x-1">→</span>
-                            </Link>
+                            {authUser ? (
+                                <Link href="/dashboard" className="btn-primary group">
+                                    Go to Dashboard <span className="inline-block transition-transform group-hover:translate-x-1">→</span>
+                                </Link>
+                            ) : (
+                                <Link href="/login" className="btn-primary group">
+                                    Start Free <span className="inline-block transition-transform group-hover:translate-x-1">→</span>
+                                </Link>
+                            )}
                             <button onClick={() => scrollToSection('features')} className="btn-secondary">
                                 Learn More
                             </button>
