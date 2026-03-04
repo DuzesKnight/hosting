@@ -8,15 +8,15 @@ import {
     LayoutDashboard, Server, CreditCard, Wallet, Gift, HeadphonesIcon,
     User, Settings, Shield, Menu, X, LogOut, ChevronRight, Cloud, Coins
 } from 'lucide-react';
-import { authApi } from '@/lib/api';
+import { authApi, settingsApi } from '@/lib/api';
 
-const navItems = [
+const allNavItems = [
     { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { href: '/dashboard/servers', icon: Server, label: 'Servers' },
     { href: '/dashboard/plans', icon: CreditCard, label: 'Plans' },
     { href: '/dashboard/billing', icon: Wallet, label: 'Billing' },
     { href: '/dashboard/balance', icon: Coins, label: 'Balance' },
-    { href: '/dashboard/vps', icon: Cloud, label: 'VPS Hosting' },
+    { href: '/dashboard/vps', icon: Cloud, label: 'VPS Hosting', featureKey: 'VPS_ENABLED' },
     { href: '/dashboard/credits', icon: Gift, label: 'Earn Credits' },
     { href: '/dashboard/support', icon: HeadphonesIcon, label: 'Support' },
     { href: '/dashboard/profile', icon: User, label: 'Profile' },
@@ -28,11 +28,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const [user, setUser] = useState<any>(null);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [features, setFeatures] = useState<Record<string, string>>({});
 
     useEffect(() => {
         authApi.getMe()
             .then((res) => { setUser(res.data.user); setLoading(false); })
             .catch(() => { router.push('/login'); });
+        settingsApi.public().then((r) => setFeatures(r.data || {})).catch(() => {});
     }, [router]);
 
     const handleLogout = async () => {
@@ -64,7 +66,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
                     {/* Nav links */}
                     <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-                        {navItems.map((item) => {
+                        {allNavItems
+                            .filter((item) => !('featureKey' in item) || features[item.featureKey!] !== 'false')
+                            .map((item) => {
                             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname?.startsWith(item.href));
                             return (
                                 <Link

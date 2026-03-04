@@ -64,11 +64,27 @@ export class AdminService {
     }
 
     async deleteUser(userId: string, adminId?: string) {
+        // Prevent admin from deleting themselves
+        if (adminId && userId === adminId) {
+            throw new ConflictException('You cannot delete your own account');
+        }
+
         // Clean up Pterodactyl account before deleting
         const user = await this.prisma.user.findUnique({
             where: { id: userId },
-            include: { pterodactylAccount: true, servers: true },
+            include: { pterodactylAccount: true, servers: true, vpsInstances: true },
         });
+
+        // Terminate all VPS instances on Datalix
+        if (user?.vpsInstances?.length) {
+            for (const vps of user.vpsInstances) {
+                if (vps.status !== 'TERMINATED') {
+                    try { await this.vpsService.terminateVps(vps.id); } catch { /* best effort */ }
+                }
+            }
+        }
+
+        // Delete all Pterodactyl servers + account
         if (user?.pterodactylAccount) {
             // Delete all user's servers from Pterodactyl first
             for (const server of user.servers) {

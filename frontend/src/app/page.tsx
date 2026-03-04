@@ -696,8 +696,8 @@ export default function LandingPage() {
                                     <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> Plugin Installer</li>
                                     <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> DDoS Protection</li>
                                 </ul>
-                                <Link href="/login" className={i === 2 ? 'btn-primary w-full text-center block' : 'btn-secondary w-full text-center block'}>
-                                    Get Started
+                                <Link href={authUser ? '/dashboard/servers/create' : '/login'} className={i === 2 ? 'btn-primary w-full text-center block' : 'btn-secondary w-full text-center block'}>
+                                    {authUser ? 'Create Server' : 'Get Started'}
                                 </Link>
                             </motion.div>
                         ))}
@@ -739,8 +739,14 @@ export default function LandingPage() {
                                 GameHost scales with you. Start free, upgrade when you need more power.
                             </p>
                             <div className="flex flex-wrap gap-3">
-                                <Link href="/login" className="btn-primary">Get Started Free</Link>
-                                <Link href="/signup" className="btn-secondary">Create Account</Link>
+                                {authUser ? (
+                                    <Link href="/dashboard" className="btn-primary">Go to Dashboard</Link>
+                                ) : (
+                                    <>
+                                        <Link href="/login" className="btn-primary">Get Started Free</Link>
+                                        <Link href="/signup" className="btn-secondary">Create Account</Link>
+                                    </>
+                                )}
                             </div>
                         </motion.div>
                         <motion.div
@@ -788,8 +794,8 @@ export default function LandingPage() {
                             <p className="text-gray-400 max-w-lg mx-auto mb-8">
                                 Deploy your first server for free in under 10 seconds. No credit card required.
                             </p>
-                            <Link href="/signup" className="btn-primary text-lg px-8 py-4 inline-block">
-                                Create Free Account →
+                            <Link href={authUser ? '/dashboard' : '/signup'} className="btn-primary text-lg px-8 py-4 inline-block">
+                                {authUser ? 'Go to Dashboard →' : 'Create Free Account →'}
                             </Link>
                         </div>
                     </motion.div>
@@ -812,13 +818,13 @@ export default function LandingPage() {
                             <div className="space-y-2">
                                 <button onClick={() => scrollToSection('features')} className="block text-sm text-gray-500 hover:text-white transition-colors">Features</button>
                                 <button onClick={() => scrollToSection('pricing')} className="block text-sm text-gray-500 hover:text-white transition-colors">Pricing</button>
-                                <Link href="/login" className="block text-sm text-gray-500 hover:text-white transition-colors">Dashboard</Link>
+                                <Link href={authUser ? '/dashboard' : '/login'} className="block text-sm text-gray-500 hover:text-white transition-colors">Dashboard</Link>
                             </div>
                         </div>
                         <div>
                             <h4 className="text-sm font-semibold text-gray-300 mb-3">Support</h4>
                             <div className="space-y-2">
-                                <Link href="/login" className="block text-sm text-gray-500 hover:text-white transition-colors">Help Center</Link>
+                                <Link href={authUser ? '/dashboard/support' : '/login'} className="block text-sm text-gray-500 hover:text-white transition-colors">Help Center</Link>
                                 <button onClick={() => scrollToSection('about')} className="block text-sm text-gray-500 hover:text-white transition-colors">About Us</button>
                             </div>
                         </div>

@@ -13,6 +13,7 @@ const PUBLIC_KEYS = [
     'MAINTENANCE_MODE',
     'TERMS_URL',
     'PRIVACY_URL',
+    'VPS_ENABLED',
 ];
 
 @Controller('settings')

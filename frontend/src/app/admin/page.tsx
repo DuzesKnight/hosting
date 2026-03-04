@@ -3,12 +3,13 @@
 import { useState, useEffect } from 'react';
 import { adminApi } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { authApi, plansApi } from '@/lib/api';
 import {
     LayoutDashboard, Users, Server, CreditCard, Settings, ClipboardList,
     Shield, DollarSign, Check, X, UserX, Link2, AlertTriangle, Trash2,
     CloudCog, RefreshCw, TrendingUp, Megaphone, Eye, EyeOff, Plus, Minus,
-    ShieldAlert, ToggleLeft, ToggleRight, Monitor
+    ShieldAlert, ToggleLeft, ToggleRight, Monitor, ArrowLeft
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -109,7 +110,7 @@ export default function AdminPage() {
         <div className="min-h-screen bg-dark">
             <div className="flex">
                 {/* Admin Sidebar */}
-                <aside className="w-64 min-h-screen bg-dark-50 border-r border-white/5 p-4 hidden lg:block">
+                <aside className="w-64 min-h-screen bg-dark-50 border-r border-white/5 p-4 hidden lg:flex lg:flex-col">
                     <div className="flex items-center gap-2 px-4 py-3 mb-4">
                         <Shield className="w-5 h-5 text-primary" />
                         <span className="font-display font-bold">Admin Panel</span>
@@ -126,12 +127,22 @@ export default function AdminPage() {
                             </button>
                         ))}
                     </nav>
+                    <div className="mt-auto pt-4 border-t border-white/5">
+                        <Link href="/dashboard" className="sidebar-link w-full text-gray-400 hover:text-white">
+                            <ArrowLeft className="w-5 h-5" />
+                            <span>Back to Dashboard</span>
+                        </Link>
+                    </div>
                 </aside>
 
                 {/* Content */}
                 <main className="flex-1 p-6">
                     {/* Mobile tabs */}
                     <div className="flex gap-2 mb-6 overflow-x-auto lg:hidden">
+                        <Link href="/dashboard"
+                            className="px-4 py-2 rounded-lg text-sm whitespace-nowrap text-gray-400 hover:text-white flex items-center gap-1">
+                            <ArrowLeft className="w-4 h-4" /> Dashboard
+                        </Link>
                         {adminTabs.map((t) => (
                             <button key={t.id} onClick={() => loadTab(t.id)}
                                 className={`px-4 py-2 rounded-lg text-sm whitespace-nowrap ${tab === t.id ? 'bg-primary/10 text-primary' : 'text-gray-400'}`}>
@@ -184,7 +195,7 @@ export default function AdminPage() {
                                                 <td className="p-4 text-gray-400 hidden md:table-cell">{u.email}</td>
                                                 <td className="p-4"><span className={u.role === 'ADMIN' ? 'text-primary' : 'text-gray-400'}>{u.role}</span></td>
                                                 <td className="p-4 text-gray-400 hidden sm:table-cell">{u._count?.servers || 0}</td>
-                                                <td className="p-4">
+                                                <td className="p-4 flex gap-2">
                                                     <button onClick={async () => {
                                                         const action = u.role === 'ADMIN' ? 'demote' : 'promote';
                                                         if (!confirm(`Are you sure you want to ${action} "${u.name}"?`)) return;
@@ -193,6 +204,20 @@ export default function AdminPage() {
                                                     }}
                                                         className="text-xs px-3 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20">
                                                         {u.role === 'ADMIN' ? 'Demote' : 'Promote'}
+                                                    </button>
+                                                    <button onClick={async () => {
+                                                        if (!confirm(`⚠️ PERMANENTLY DELETE "${u.name}" (${u.email})?\n\nThis will:\n• Delete all their servers from Pterodactyl\n• Remove their Pterodactyl account\n• Delete all payments, balance, and data\n\nThis action CANNOT be undone.`)) return;
+                                                        if (!confirm(`Final confirmation: Type OK to delete "${u.name}" forever.`)) return;
+                                                        try {
+                                                            await adminApi.deleteUser(u.id);
+                                                            toast.success(`User "${u.name}" permanently deleted`);
+                                                            loadTab('users');
+                                                        } catch (e: any) {
+                                                            toast.error(e?.response?.data?.message || 'Failed to delete user');
+                                                        }
+                                                    }}
+                                                        className="text-xs px-3 py-1 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20">
+                                                        <Trash2 className="w-3 h-3 inline mr-1" />Delete
                                                     </button>
                                                 </td>
                                             </tr>
@@ -910,6 +935,36 @@ export default function AdminPage() {
                     {tab === 'settings' && (
                         <div>
                             <h2 className="text-2xl font-display font-bold mb-6">Platform Settings</h2>
+
+                            {/* Feature Toggles */}
+                            <div className="glass-card p-6 mb-6 max-w-2xl">
+                                <h3 className="text-lg font-semibold mb-4">Feature Toggles</h3>
+                                <div className="flex items-center justify-between py-3 border-b border-white/5">
+                                    <div>
+                                        <p className="font-medium">VPS Hosting</p>
+                                        <p className="text-sm text-gray-500">Show or hide VPS hosting from all users</p>
+                                    </div>
+                                    <button
+                                        onClick={async () => {
+                                            const newVal = settings['VPS_ENABLED'] === 'true' ? 'false' : 'true';
+                                            try {
+                                                await adminApi.updateSettings({ VPS_ENABLED: newVal });
+                                                setSettings({ ...settings, VPS_ENABLED: newVal });
+                                                toast.success(`VPS hosting ${newVal === 'true' ? 'enabled' : 'disabled'}`);
+                                            } catch { toast.error('Failed to update'); }
+                                        }}
+                                        className="flex items-center"
+                                    >
+                                        {settings['VPS_ENABLED'] === 'true' ? (
+                                            <ToggleRight className="w-8 h-8 text-green-400" />
+                                        ) : (
+                                            <ToggleLeft className="w-8 h-8 text-gray-500" />
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Text Settings */}
                             <div className="glass-card p-6 space-y-4 max-w-2xl">
                                 {['app_name', 'primary_color', 'accent_color', 'hero_title', 'hero_subtitle', 'footer_text'].map((key) => (
                                     <div key={key}>
