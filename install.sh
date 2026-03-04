@@ -118,7 +118,7 @@ spinner() {
 # ─── .env Helper: read a value from a key=value file ──────
 env_get() {
   local file=$1 key=$2
-  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
 }
 
 # ─── .env Helper: set a value (insert or update) ─────────
@@ -164,8 +164,9 @@ resolve_base_url() {
   # Priority 1: APP_URL from .env (user-configured domain)
   local app_url=$(env_get .env APP_URL 2>/dev/null)
   if [ -n "$app_url" ] && [[ "$app_url" != *"localhost"* ]]; then
-    # Strip trailing slash
+    # Strip trailing slash and any port (nginx handles routing on :80)
     BASE_URL="${app_url%/}"
+    BASE_URL=$(echo "$BASE_URL" | sed -E 's|:[0-9]+$||')
     URL_SOURCE="domain (.env APP_URL)"
     return 0
   fi
@@ -544,29 +545,57 @@ BE_PORT_EARLY=${BE_PORT_EARLY:-4000}
 resolve_base_url "$FE_PORT_EARLY" "$BE_PORT_EARLY"
 
 # Determine the correct callback base
-# Domain (nginx proxied): https://domain.com  → /api/auth/... via nginx
-# IP/localhost:           http://ip:4000      → direct backend port
-IS_DOMAIN=false
-if [[ "$URL_SOURCE" == "domain"* ]]; then
-  IS_DOMAIN=true
+# Docker architecture: nginx is always the external entrypoint on port 80/443
+# Internal ports (3000/4000) are bound to 127.0.0.1 and NOT reachable externally
+#
+# Domain:                https://domain.com     → nginx → frontend/backend
+# VPS IP:                http://ip              → nginx :80 → frontend/backend
+# localhost (dev only):  http://localhost:3000   → direct container port
+IS_NGINX_PROXIED=false
+if [[ "$URL_SOURCE" == "localhost"* ]]; then
+  # Only localhost uses direct ports (dev without nginx)
+  IS_NGINX_PROXIED=false
+else
+  # Domain or IP: always go through nginx (port 80)
+  IS_NGINX_PROXIED=true
 fi
 
-if $IS_DOMAIN; then
-  CALLBACK_BASE="${BASE_URL}"
-  RESOLVED_APP_URL="${BASE_URL}"
+# Legacy alias
+IS_DOMAIN=$IS_NGINX_PROXIED
 
-  # Validate: if APP_URL is https://, warn if nginx SSL is not enabled
+if $IS_NGINX_PROXIED; then
+  # Strip any port from BASE_URL since nginx serves on 80
+  CLEAN_BASE=$(echo "$BASE_URL" | sed -E 's|:[0-9]+$||')
+  CALLBACK_BASE="${CLEAN_BASE}"
+  RESOLVED_APP_URL="${CLEAN_BASE}"
+
+  # Validate: if APP_URL is https://, check SSL setup
   if [[ "$BASE_URL" == https://* ]]; then
     if [ -f nginx/nginx.conf ]; then
-      if ! grep -q '^[[:space:]]*listen.*443' nginx/nginx.conf 2>/dev/null; then
-        warn "APP_URL uses HTTPS but nginx SSL is not enabled!"
-        detail "Either enable SSL in nginx/nginx.conf (uncomment listen 443 + certs)"
-        detail "or change APP_URL to http:// if using an external SSL proxy (Cloudflare, etc.)"
-        detail "OAuth redirects will fail if HTTPS is not reachable."
+      local nginx_has_443=false
+      if grep -q '^[[:space:]]*listen.*443' nginx/nginx.conf 2>/dev/null; then
+        nginx_has_443=true
+      fi
+
+      if ! $nginx_has_443; then
+        # No 443 listener — check if this might be Cloudflare Flexible mode
+        info "${YELLOW}APP_URL uses HTTPS but nginx is only listening on port 80${NC}"
+        detail "This is ${GREEN}${BOLD}fine${NC} if you're using ${CYAN}Cloudflare Proxy (orange cloud)${NC} with:"
+        detail "  • ${BOLD}Flexible SSL${NC} — Cloudflare handles HTTPS, forwards HTTP to nginx:80"
+        detail "  • ${BOLD}Full SSL${NC} — same, but origin must also serve HTTPS (see below)"
+        detail ""
+        detail "If you want ${CYAN}Cloudflare Full (Strict) SSL${NC} ${DIM}(recommended)${NC}:"
+        detail "  1. Cloudflare Dashboard → SSL/TLS → Origin Server → Create Certificate"
+        detail "  2. Save cert → ${BOLD}nginx/ssl/fullchain.pem${NC}"
+        detail "  3. Save key  → ${BOLD}nginx/ssl/privkey.pem${NC}"
+        detail "  4. Uncomment \`listen 443 ssl http2\` + SSL block in ${BOLD}nginx/nginx.conf${NC}"
+        detail "  5. Run: ${BOLD}bash restart.sh${NC}"
+        detail ""
+        detail "If NOT using Cloudflare: either add your own certs or use http:// in APP_URL"
       fi
     fi
-    # Also validate that SSL cert files exist if using self-managed SSL
-    if [ -f nginx/nginx.conf ] && grep -q 'ssl_certificate' nginx/nginx.conf 2>/dev/null; then
+    # Validate that SSL cert files exist if nginx config references them
+    if [ -f nginx/nginx.conf ] && grep -q '^[[:space:]]*ssl_certificate' nginx/nginx.conf 2>/dev/null; then
       if [ ! -f nginx/ssl/fullchain.pem ] || [ ! -f nginx/ssl/privkey.pem ]; then
         warn "SSL certificate files not found in nginx/ssl/"
         detail "Expected: nginx/ssl/fullchain.pem and nginx/ssl/privkey.pem"
@@ -574,6 +603,7 @@ if $IS_DOMAIN; then
     fi
   fi
 else
+  # localhost fallback: use direct container ports (dev mode without nginx)
   CALLBACK_BASE="${BASE_URL}:${BE_PORT_EARLY}"
   RESOLVED_APP_URL="${BASE_URL}:${FE_PORT_EARLY}"
 fi
@@ -619,8 +649,8 @@ else
 fi
 
 # --- BACKEND_URL ---
-if $IS_DOMAIN; then
-  # Domain mode: backend is behind nginx, so BACKEND_URL = domain (no port)
+if $IS_NGINX_PROXIED; then
+  # Nginx-proxied mode (domain or IP): backend is behind nginx, no port needed
   env_set .env BACKEND_URL "$CALLBACK_BASE"
   ok "BACKEND_URL            ${GREEN}${BOLD}synced${NC} → ${CALLBACK_BASE} ${DIM}(nginx proxied)${NC}"
 else
@@ -629,7 +659,8 @@ else
 fi
 
 # --- NEXT_PUBLIC_API_URL ---
-if $IS_DOMAIN; then
+if $IS_NGINX_PROXIED; then
+  # Nginx-proxied: frontend makes relative API calls via same origin
   env_set .env NEXT_PUBLIC_API_URL ""
   ok "NEXT_PUBLIC_API_URL    ${DIM}empty (nginx proxied)${NC}"
 else
@@ -890,13 +921,17 @@ ok "Resolved via ${BOLD}${URL_SOURCE}${NC}"
 detail "Base URL: ${BASE_URL}"
 
 # Build access URLs
-# If domain (nginx proxied), use clean URLs without ports
-# If IP/localhost, append ports
-if [[ "$URL_SOURCE" == "domain"* ]]; then
+# Nginx proxied (domain OR IP): clean URLs without ports (nginx on :80)
+# Localhost only: append ports (direct container access, dev mode)
+if $IS_NGINX_PROXIED; then
   FRONTEND_URL="${BASE_URL}"
   BACKEND_URL="${BASE_URL}/api"
   HEALTH_URL="${BASE_URL}/api/health"
   HEALTH_INTERNAL="http://localhost:${BE_PORT}/api/health"
+  # Strip any leftover port from BASE_URL
+  FRONTEND_URL=$(echo "$FRONTEND_URL" | sed -E 's|:[0-9]+$||')
+  BACKEND_URL=$(echo "$FRONTEND_URL")/api
+  HEALTH_URL=$(echo "$FRONTEND_URL")/api/health
 else
   FRONTEND_URL="${BASE_URL}:${FE_PORT}"
   BACKEND_URL="${BASE_URL}:${BE_PORT}"
@@ -1088,8 +1123,8 @@ echo -e "${GRAY}   ║${NC}                                                     
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}   ${WHITE}${BOLD}Access Points${NC}                                               ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Frontend${NC}     ${FRONTEND_URL}${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Backend${NC}      ${BACKEND_URL}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Website${NC}      ${FRONTEND_URL}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}API${NC}          ${BACKEND_URL}${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       ${HEALTH_URL}${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"

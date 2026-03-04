@@ -40,8 +40,10 @@ export class CreditsService {
 
     // Earn credits via ad watching
     async earnCredits(userId: string): Promise<any> {
-        const reward = parseInt(this.config.get('FREE_CREDITS_REWARD', '10'));
-        const timerSeconds = parseInt(this.config.get('FREE_CREDITS_TIMER_SECONDS', '60'));
+        // Use admin DB settings (same source as getEarnConfig) instead of .env fallbacks
+        const config = await this.buildEarnConfig();
+        const reward = config.reward;
+        const timerSeconds = config.timerSeconds;
 
         // Check last earn time
         const lastEarn = await this.prisma.creditEarn.findFirst({
@@ -162,13 +164,28 @@ export class CreditsService {
         const deleteDays = parseInt(this.config.get('FREE_SERVER_DELETE_DAYS', '7'));
         const deleteThreshold = new Date(Date.now() - deleteDays * 24 * 60 * 60 * 1000);
 
-        await this.prisma.server.updateMany({
+        const serversToDelete = await this.prisma.server.findMany({
             where: {
                 isFreeServer: true,
                 status: ServerStatus.SUSPENDED,
                 updatedAt: { lte: deleteThreshold },
             },
-            data: { status: ServerStatus.DELETED },
         });
+
+        for (const server of serversToDelete) {
+            // Delete from Pterodactyl first (force=true to ensure cleanup even if daemon is offline)
+            if (server.pteroServerId) {
+                try {
+                    await this.pterodactyl.deleteServer(server.pteroServerId, true);
+                } catch (e: any) {
+                    this.logger.error(`Failed to delete server ${server.pteroServerId} from Pterodactyl: ${e.message}`);
+                }
+            }
+            await this.prisma.server.update({
+                where: { id: server.id },
+                data: { status: ServerStatus.DELETED },
+            });
+            this.logger.warn(`Free server ${server.id} auto-deleted (suspended ${deleteDays}+ days)`);
+        }
     }
 }

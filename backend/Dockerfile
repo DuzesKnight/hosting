@@ -28,4 +28,5 @@ USER appuser
 EXPOSE 4000
 
 # dumb-init forwards SIGTERM properly for graceful shutdown
-CMD ["dumb-init", "sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+# migrate deploy applies committed migrations; db push is the fallback for first-run edge cases
+CMD ["dumb-init", "sh", "-c", "(npx prisma migrate deploy || npx prisma db push --skip-generate) && node dist/main.js"]

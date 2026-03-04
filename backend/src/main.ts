@@ -79,6 +79,7 @@ async function bootstrap() {
     // so we only need error/warn/log coming through during init.
     const app = await NestFactory.create(AppModule, {
         logger: ['error', 'warn', 'log'],
+        rawBody: true, // Required for webhook signature verification
     });
     const config = app.get(ConfigService);
     logDone('NestJS application created');

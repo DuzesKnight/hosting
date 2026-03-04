@@ -3,7 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
 import { PterodactylClientService } from '../pterodactyl/pterodactyl-client.service';
 import { AuthService } from '../auth/auth.service';
-import { ServerStatus } from '@prisma/client';
+import { ServerStatus, PlanType } from '@prisma/client';
 
 @Injectable()
 export class ServersService {
@@ -33,12 +33,19 @@ export class ServersService {
             orderBy: { createdAt: 'desc' },
         });
 
-        // Enrich with live status from Pterodactyl
+        // Enrich with live status from Pterodactyl (with concurrency guard)
         const enriched = await Promise.all(
             servers.map(async (server) => {
                 let resources = null;
                 if (server.pteroUuid) {
-                    resources = await this.pterodactylClient.getServerResources(server.pteroUuid);
+                    try {
+                        resources = await Promise.race([
+                            this.pterodactylClient.getServerResources(server.pteroUuid),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+                        ]);
+                    } catch {
+                        // Silently skip — resource fetch is best-effort enrichment
+                    }
                 }
                 return { ...server, resources };
             }),
@@ -60,8 +67,12 @@ export class ServersService {
         let resources = null;
 
         if (server.pteroUuid) {
-            pteroData = await this.pterodactylClient.getServer(server.pteroUuid);
-            resources = await this.pterodactylClient.getServerResources(server.pteroUuid);
+            try {
+                pteroData = await this.pterodactylClient.getServer(server.pteroUuid);
+                resources = await this.pterodactylClient.getServerResources(server.pteroUuid);
+            } catch (e) {
+                this.logger.warn(`Failed to fetch Pterodactyl data for ${server.pteroUuid}: ${e.message}`);
+            }
         }
 
         return { ...server, pteroData, resources };
@@ -82,10 +93,108 @@ export class ServersService {
         // Ensure user has Pterodactyl account (auto-heal)
         const user = await this.prisma.user.findUnique({
             where: { id: userId },
-            include: { pterodactylAccount: true },
+            include: { pterodactylAccount: true, balance: true, credits: true },
         });
 
         if (!user) throw new BadRequestException('User not found');
+
+        // Get plan for resource limits and pricing
+        const plan = await this.prisma.plan.findUnique({ where: { id: data.planId } });
+        if (!plan) throw new BadRequestException('Invalid plan');
+        if (!plan.isActive) throw new BadRequestException('This plan is no longer available');
+
+        // Determine final resources
+        let ram = plan.ram;
+        let cpu = plan.cpu;
+        let disk = plan.disk;
+
+        if (plan.type === PlanType.CUSTOM && (data.ram || data.cpu || data.disk)) {
+            // Validate custom builder limits
+            ram = data.ram || plan.ram;
+            cpu = data.cpu || plan.cpu;
+            disk = data.disk || plan.disk;
+
+            // Enforce plan min/max limits
+            const minRam = plan.minRam || 512;
+            const maxRam = plan.maxRam || 16384;
+            const minCpu = plan.minCpu || 50;
+            const maxCpu = plan.maxCpu || 800;
+            const minDisk = plan.minDisk || 1024;
+            const maxDisk = plan.maxDisk || 102400;
+
+            if (ram < minRam || ram > maxRam) throw new BadRequestException(`RAM must be between ${minRam}MB and ${maxRam}MB`);
+            if (cpu < minCpu || cpu > maxCpu) throw new BadRequestException(`CPU must be between ${minCpu}% and ${maxCpu}%`);
+            if (disk < minDisk || disk > maxDisk) throw new BadRequestException(`Disk must be between ${minDisk}MB and ${maxDisk}MB`);
+        } else if (data.ram || data.cpu || data.disk) {
+            // Non-custom plans: ignore custom resources, use plan values
+            ram = plan.ram;
+            cpu = plan.cpu;
+            disk = plan.disk;
+        }
+
+        // ---------- Cost verification for paid plans ----------
+        if (plan.type === PlanType.PREMIUM || plan.type === PlanType.CUSTOM) {
+            let price: number;
+
+            if (plan.type === PlanType.CUSTOM) {
+                // Calculate custom price
+                const pricePerGb = plan.pricePerGb || 50;
+                const ramGb = ram / 1024;
+                const cpuFactor = cpu / 100;
+                const diskGb = disk / 1024;
+                price = Math.ceil(ramGb * pricePerGb + diskGb * (pricePerGb * 0.1) + cpuFactor * (pricePerGb * 0.5));
+            } else {
+                price = plan.pricePerMonth;
+            }
+
+            if (price > 0) {
+                // Try to deduct from balance first (atomic transaction)
+                const userBalance = user.balance?.amount || 0;
+                if (userBalance < price) {
+                    throw new BadRequestException(
+                        `Insufficient balance. Server costs ₹${price}/mo but you only have ₹${userBalance.toFixed(2)}. Please add funds first.`
+                    );
+                }
+
+                // Deduct balance atomically
+                const deducted = await this.prisma.$transaction(async (tx) => {
+                    const bal = await tx.balance.findUnique({ where: { userId } });
+                    if (!bal || bal.amount < price) return false;
+                    await tx.balance.update({
+                        where: { userId },
+                        data: { amount: { decrement: price } },
+                    });
+                    return true;
+                });
+
+                if (!deducted) {
+                    throw new BadRequestException('Insufficient balance — concurrent deduction detected. Please try again.');
+                }
+
+                // Record payment
+                await this.prisma.payment.create({
+                    data: {
+                        userId,
+                        gateway: 'BALANCE',
+                        amount: price,
+                        status: 'COMPLETED',
+                        metadata: { type: 'server_creation', planId: plan.id, ram, cpu, disk },
+                    },
+                });
+
+                this.logger.log(`Deducted ₹${price} from user ${userId} for server creation`);
+            }
+        }
+
+        // ---------- Free plan: require credits ----------
+        if (plan.type === PlanType.FREE) {
+            const credits = user.credits?.amount || 0;
+            if (credits <= 0) {
+                throw new BadRequestException('You need credits to create a free server. Earn credits by watching ads.');
+            }
+        }
+
+        // ---------- Create Pterodactyl account ----------
         await this.authService.ensurePterodactylAccount(user);
 
         // Refresh user to get pterodactylId
@@ -102,14 +211,6 @@ export class ServersService {
         const egg = await this.pterodactyl.getEgg(data.nestId, data.eggId);
         if (!egg) throw new BadRequestException('Invalid egg');
 
-        // Get plan for resource limits
-        const plan = await this.prisma.plan.findUnique({ where: { id: data.planId } });
-        if (!plan) throw new BadRequestException('Invalid plan');
-
-        const ram = data.ram || plan.ram;
-        const cpu = data.cpu || plan.cpu;
-        const disk = data.disk || plan.disk;
-
         // Build environment variables from egg defaults
         const environment: Record<string, string> = {};
         if (egg.relationships?.variables?.data) {
@@ -119,22 +220,30 @@ export class ServersService {
             }
         }
 
+        // Determine docker image (egg may have multiple, pick first)
+        const dockerImage = egg.docker_image || (egg.docker_images ? Object.values(egg.docker_images)[0] : 'ghcr.io/pterodactyl/yolks:java_17');
+
         // Determine node/allocation
         let deploy: any = undefined;
         let allocation: any = undefined;
         if (data.nodeId) {
-            // Get a free allocation from the specified node
-            const allocations = await this.pterodactyl.getNodeAllocations(data.nodeId);
-            const freeAlloc = allocations?.data?.find((a: any) => !a.attributes.assigned);
-            if (!freeAlloc) throw new BadRequestException('No free allocations on selected node');
-            allocation = { default: freeAlloc.attributes.id };
+            // Get a free allocation from the specified node (paginated)
+            const freeAlloc = await this.pterodactyl.findFreeAllocation(data.nodeId);
+            if (!freeAlloc) throw new BadRequestException('No free allocations on selected node. Try another location.');
+            allocation = { default: freeAlloc.id };
+        } else if (plan.nodeId) {
+            // Plan has a locked node
+            const freeAlloc = await this.pterodactyl.findFreeAllocation(plan.nodeId);
+            if (!freeAlloc) throw new BadRequestException('No free allocations on the plan node. Contact support.');
+            allocation = { default: freeAlloc.id };
         } else {
-            // Dynamic: let Pterodactyl auto-deploy
+            // Dynamic: let Pterodactyl auto-deploy across all locations
             const locations = await this.pterodactyl.getLocations();
+            if (!locations.length) throw new BadRequestException('No server locations available. Contact support.');
             deploy = {
                 locations: locations.map((l: any) => l.id),
                 dedicated_ip: false,
-                port_range: [],
+                port_range: ['1024-65535'],  // Allow any port; Pterodactyl picks from available allocations
             };
         }
 
@@ -143,7 +252,7 @@ export class ServersService {
             name: data.name,
             user: updatedUser.pterodactylId,
             egg: data.eggId,
-            docker_image: egg.docker_image,
+            docker_image: dockerImage,
             startup: egg.startup,
             environment,
             limits: { memory: ram, swap: 0, disk, io: 500, cpu },
@@ -152,7 +261,27 @@ export class ServersService {
             allocation,
         });
 
-        if (!pteroServer) throw new BadRequestException('Failed to create server in Pterodactyl');
+        if (!pteroServer) {
+            // Refund if paid
+            if (plan.type !== PlanType.FREE) {
+                const pricePerGb = plan.pricePerGb || 50;
+                const ramGb = ram / 1024;
+                const cpuFactor = cpu / 100;
+                const diskGb = disk / 1024;
+                const price = plan.type === PlanType.CUSTOM
+                    ? Math.ceil(ramGb * pricePerGb + diskGb * (pricePerGb * 0.1) + cpuFactor * (pricePerGb * 0.5))
+                    : plan.pricePerMonth;
+                if (price > 0) {
+                    await this.prisma.balance.upsert({
+                        where: { userId },
+                        update: { amount: { increment: price } },
+                        create: { userId, amount: price },
+                    });
+                    this.logger.warn(`Refunded ₹${price} to user ${userId} due to Pterodactyl provisioning failure`);
+                }
+            }
+            throw new BadRequestException('Failed to create server in Pterodactyl. Your balance has been refunded.');
+        }
 
         // Save to DB
         const server = await this.prisma.server.create({
@@ -164,20 +293,20 @@ export class ServersService {
                 pteroUuid: pteroServer.uuid,
                 pteroIdentifier: pteroServer.identifier,
                 status: ServerStatus.ACTIVE,
-                isFreeServer: plan.type === 'FREE',
+                isFreeServer: plan.type === PlanType.FREE,
                 ram,
                 cpu,
                 disk,
                 backups: plan.backups,
                 ports: plan.ports,
                 databases: plan.databases,
-                expiresAt: plan.type === 'FREE'
+                expiresAt: plan.type === PlanType.FREE
                     ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)  // Free: 7 days
                     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Paid: 30 days
             },
         });
 
-        this.logger.log(`Server ${server.id} provisioned for user ${userId}`);
+        this.logger.log(`Server ${server.id} provisioned for user ${userId} (${ram}MB RAM / ${cpu}% CPU / ${disk}MB Disk)`);
         return server;
     }
 

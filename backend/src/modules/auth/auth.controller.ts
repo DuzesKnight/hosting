@@ -31,7 +31,7 @@ export class AuthController {
     @Post('login')
     @Throttle({ default: { limit: 10, ttl: 60000 } })
     async login(@Body() dto: LoginDto, @Req() req: Request, @Res() res: Response) {
-        const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+        const ip = (req.headers['cf-connecting-ip'] as string) || (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
         const userAgent = req.headers['user-agent'];
         const { token } = await this.authService.login(dto.email, dto.password, ip, userAgent);
         this.setTokenCookie(res, token);
@@ -84,7 +84,7 @@ export class AuthController {
     @Throttle({ default: { limit: 5, ttl: 60000 } })
     async googleCallback(@Query('code') code: string, @Req() req: Request, @Res() res: Response) {
         try {
-            const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+            const ip = (req.headers['cf-connecting-ip'] as string) || (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
             const userAgent = req.headers['user-agent'];
             const { token } = await this.authService.handleGoogleCallback(code, ip, userAgent);
             this.setTokenCookie(res, token);
@@ -107,7 +107,7 @@ export class AuthController {
     @Throttle({ default: { limit: 5, ttl: 60000 } })
     async discordCallback(@Query('code') code: string, @Req() req: Request, @Res() res: Response) {
         try {
-            const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+            const ip = (req.headers['cf-connecting-ip'] as string) || (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
             const userAgent = req.headers['user-agent'];
             const { token } = await this.authService.handleDiscordCallback(code, ip, userAgent);
             this.setTokenCookie(res, token);
@@ -137,9 +137,11 @@ export class AuthController {
     // HELPERS
     // ============================================================
     private setTokenCookie(res: Response, token: string) {
+        const appUrl = this.config.get('APP_URL', 'http://localhost:3000');
+        const isHttps = appUrl.startsWith('https://');
         res.cookie('token', token, {
             httpOnly: true,
-            secure: this.config.get('NODE_ENV') === 'production',
+            secure: isHttps,
             sameSite: 'lax',
             maxAge: 7 * 24 * 60 * 60 * 1000,
         });

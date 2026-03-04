@@ -272,13 +272,17 @@ export class PterodactylClientService {
 
     // ========== STARTUP ==========
 
-    async getStartup(uuid: string): Promise<any> {
+    async getStartup(uuid: string): Promise<any[]> {
         try {
             const { data } = await this.api.get(`/servers/${uuid}/startup`);
-            return data;
+            // Normalize: return array of variable attributes like all other list methods
+            if (data?.data && Array.isArray(data.data)) {
+                return data.data.map((v: any) => v.attributes);
+            }
+            return data?.data || [];
         } catch (e) {
             this.logger.error(`Failed to get startup for ${uuid}: ${e.message}`);
-            return null;
+            return [];
         }
     }
 

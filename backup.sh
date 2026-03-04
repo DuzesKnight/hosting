@@ -106,7 +106,7 @@ KEEP_FULL_DAYS=90     # Retain full backups for 90 days
 
 env_get() {
   local file=$1 key=$2
-  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
 }
 
 # ─── Lock File (prevent concurrent backups) ───────────────

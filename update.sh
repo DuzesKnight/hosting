@@ -117,7 +117,7 @@ spinner() {
 
 env_get() {
   local file=$1 key=$2
-  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
 }
 
 env_set() {
@@ -135,7 +135,7 @@ resolve_base_url() {
 
   local app_url=$(env_get .env APP_URL 2>/dev/null)
   if [ -n "$app_url" ] && [[ "$app_url" != *"localhost"* ]]; then
-    BASE_URL="${app_url%/}"
+    BASE_URL=$(echo "${app_url%/}" | sed -E 's|:[0-9]+$||')
     URL_SOURCE="domain (.env APP_URL)"
     return 0
   fi
@@ -401,8 +401,8 @@ if $IS_DOMAIN; then
     fi
   fi
 else
-  CALLBACK_BASE="${BASE_URL}:${BE_PORT_VAL}"
-  RESOLVED_APP_URL="${BASE_URL}:${FE_PORT_VAL}"
+  CALLBACK_BASE="${BASE_URL}"
+  RESOLVED_APP_URL="${BASE_URL}"
 fi
 
 GOOGLE_REDIRECT="${CALLBACK_BASE}/api/auth/google/callback"
@@ -431,16 +431,21 @@ else
   ok "APP_URL preserved → ${CURRENT_APP_URL}"
 fi
 
-if $IS_DOMAIN; then
+IS_NGINX_PROXIED=false
+if [[ "$URL_SOURCE" != "localhost"* ]]; then
+  IS_NGINX_PROXIED=true
+fi
+
+if $IS_DOMAIN || $IS_NGINX_PROXIED; then
   env_set .env BACKEND_URL "$CALLBACK_BASE"
   ok "BACKEND_URL synced → ${CALLBACK_BASE} ${DIM}(nginx proxied)${NC}"
   env_set .env NEXT_PUBLIC_API_URL ""
   ok "NEXT_PUBLIC_API_URL  ${DIM}empty (nginx proxied)${NC}"
 else
-  env_set .env BACKEND_URL "$CALLBACK_BASE"
-  ok "BACKEND_URL synced → ${CALLBACK_BASE}"
-  env_set .env NEXT_PUBLIC_API_URL "${CALLBACK_BASE}"
-  ok "NEXT_PUBLIC_API_URL  synced → ${CALLBACK_BASE}"
+  env_set .env BACKEND_URL "${CALLBACK_BASE}:${BE_PORT_VAL}"
+  ok "BACKEND_URL synced → ${CALLBACK_BASE}:${BE_PORT_VAL}"
+  env_set .env NEXT_PUBLIC_API_URL "${CALLBACK_BASE}:${BE_PORT_VAL}"
+  ok "NEXT_PUBLIC_API_URL  synced → ${CALLBACK_BASE}:${BE_PORT_VAL}"
 fi
 
 # Sync OAuth callbacks
@@ -653,9 +658,27 @@ echo -e "${GRAY}   ║${NC}   ${DIM}Completed in ${ELAPSED_FMT}${NC}            
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Frontend${NC}     http://localhost:${FE_PORT}                          ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Backend${NC}      http://localhost:${BE_PORT}                          ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       http://localhost:${BE_PORT}/api/health                ${GRAY}║${NC}"
+# Resolve real accessible URLs
+resolve_base_url "$FE_PORT" "$BE_PORT"
+
+IS_NGINX_PROXIED=false
+if [[ "$URL_SOURCE" != "localhost"* ]]; then
+  IS_NGINX_PROXIED=true
+fi
+
+if $IS_NGINX_PROXIED; then
+  FRONTEND_URL="${BASE_URL}"
+  BACKEND_URL="${BASE_URL}/api"
+  HEALTH_URL="${BASE_URL}/api/health"
+else
+  FRONTEND_URL="${BASE_URL}:${FE_PORT}"
+  BACKEND_URL="${BASE_URL}:${BE_PORT}"
+  HEALTH_URL="${BASE_URL}:${BE_PORT}/api/health"
+fi
+
+echo -e "${GRAY}   ║${NC}   ${CYAN}Website${NC}      ${FRONTEND_URL}${NC}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}API${NC}          ${BACKEND_URL}${NC}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       ${HEALTH_URL}${NC}${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"

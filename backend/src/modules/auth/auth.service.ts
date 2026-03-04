@@ -454,8 +454,15 @@ export class AuthService {
             const existingPtero = await this.pterodactyl.findUserByEmail(user.email);
 
             if (existingPtero) {
-                await this.prisma.pterodactylAccount.create({
-                    data: {
+                // Link existing Pterodactyl account — use upsert to handle race conditions
+                await this.prisma.pterodactylAccount.upsert({
+                    where: { userId: user.id },
+                    update: {
+                        pteroUserId: existingPtero.id,
+                        pteroUsername: existingPtero.username,
+                        pteroEmail: existingPtero.email,
+                    },
+                    create: {
                         userId: user.id,
                         pteroUserId: existingPtero.id,
                         pteroUsername: existingPtero.username,
@@ -472,13 +479,20 @@ export class AuthService {
                 const pteroUser = await this.pterodactyl.createUser({
                     email: user.email,
                     username,
-                    first_name: user.name.split(' ')[0] || 'User',
-                    last_name: user.name.split(' ').slice(1).join(' ') || 'GameHost',
+                    first_name: user.name?.split(' ')[0] || 'User',
+                    last_name: user.name?.split(' ').slice(1).join(' ') || 'GameHost',
                 });
 
                 if (pteroUser) {
-                    await this.prisma.pterodactylAccount.create({
-                        data: {
+                    // Use upsert to handle race conditions from concurrent logins
+                    await this.prisma.pterodactylAccount.upsert({
+                        where: { userId: user.id },
+                        update: {
+                            pteroUserId: pteroUser.id,
+                            pteroUsername: pteroUser.username,
+                            pteroEmail: pteroUser.email,
+                        },
+                        create: {
                             userId: user.id,
                             pteroUserId: pteroUser.id,
                             pteroUsername: pteroUser.username,
@@ -490,10 +504,12 @@ export class AuthService {
                         data: { pterodactylId: pteroUser.id },
                     });
                     this.logger.log(`Created Pterodactyl account for ${user.email}`);
+                } else {
+                    this.logger.error(`Failed to create Pterodactyl user for ${user.email} — panel returned null`);
                 }
             }
         } catch (error) {
-            this.logger.error(`Failed to ensure Pterodactyl account: ${error.message}`);
+            this.logger.error(`Failed to ensure Pterodactyl account for ${user.email}: ${error.message}`);
         }
     }
 

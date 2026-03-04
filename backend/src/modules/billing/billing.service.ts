@@ -84,6 +84,11 @@ export class BillingService {
 
         if (!payment) throw new BadRequestException('Payment not found');
 
+        // Prevent double-processing (network retries, duplicate calls)
+        if (payment.status === PaymentStatus.COMPLETED) {
+            return { success: true, message: 'Payment already processed' };
+        }
+
         await this.prisma.payment.update({
             where: { id: payment.id },
             data: {
@@ -126,7 +131,7 @@ export class BillingService {
                     customer_name: user.name,
                 },
                 order_meta: {
-                    return_url: `${this.config.get('APP_URL')}/billing/verify?order_id=${orderId}`,
+                    return_url: `${this.config.get('APP_URL')}/dashboard/billing?cf_order_id=${orderId}`,
                 },
             },
             {
@@ -177,6 +182,11 @@ export class BillingService {
             });
 
             if (payment) {
+                // Prevent double-processing
+                if (payment.status === PaymentStatus.COMPLETED) {
+                    return { success: true, message: 'Payment already processed' };
+                }
+
                 await this.prisma.payment.update({
                     where: { id: payment.id },
                     data: { status: PaymentStatus.COMPLETED },
@@ -361,12 +371,13 @@ export class BillingService {
             this.logger.warn(`Server ${server.id} suspended (expired)`);
         }
 
-        // Delete servers suspended for 48+ hours
+        // Delete servers suspended for 48+ hours (use updatedAt = when status changed to SUSPENDED)
         const deleteThreshold = new Date(now.getTime() - 48 * 60 * 60 * 1000);
         const toDelete = await this.prisma.server.findMany({
             where: {
                 status: ServerStatus.SUSPENDED,
-                expiresAt: { lte: deleteThreshold },
+                isFreeServer: false, // Free servers handled by CreditsService
+                updatedAt: { lte: deleteThreshold },
             },
         });
 
@@ -398,21 +409,25 @@ export class BillingService {
 
     // ========== WEBHOOKS ==========
 
-    async handleRazorpayWebhook(body: any): Promise<any> {
+    async handleRazorpayWebhook(body: any, rawBody: string, signature: string): Promise<any> {
         const event = body.event;
         const entity = body.payload?.payment?.entity;
 
         if (!entity) return { status: 'ignored' };
 
-        // Verify webhook signature (Razorpay sends X-Razorpay-Signature header)
+        // Verify webhook signature using raw body and X-Razorpay-Signature header
         const secret = this.config.get('RAZORPAY_WEBHOOK_SECRET', '');
-        if (secret && body._rawBody) {
+        if (secret) {
+            if (!rawBody || !signature) {
+                this.logger.warn('Razorpay webhook: missing raw body or signature — rejecting');
+                return { status: 'invalid_signature' };
+            }
             const expectedSig = crypto
                 .createHmac('sha256', secret)
-                .update(body._rawBody)
+                .update(rawBody)
                 .digest('hex');
-            if (expectedSig !== body._signature) {
-                this.logger.warn('Razorpay webhook: invalid signature — ignoring');
+            if (expectedSig !== signature) {
+                this.logger.warn('Razorpay webhook: invalid signature — rejecting');
                 return { status: 'invalid_signature' };
             }
         }
@@ -430,7 +445,9 @@ export class BillingService {
                         gatewayPaymentId: entity.id,
                     },
                 });
-                await this.handlePaymentSuccess(payment);
+                // Re-fetch updated payment to pass correct status to handler
+                const updatedPayment = await this.prisma.payment.findUnique({ where: { id: payment.id } });
+                await this.handlePaymentSuccess(updatedPayment);
                 this.logger.log(`Razorpay webhook: Payment ${entity.id} captured`);
             }
         } else if (event === 'payment.failed') {
@@ -448,23 +465,25 @@ export class BillingService {
         return { status: 'ok' };
     }
 
-    async handleCashfreeWebhook(body: any): Promise<any> {
+    async handleCashfreeWebhook(body: any, rawBody: string, signature: string, timestamp: string): Promise<any> {
         const event = body.type;
         const data = body.data;
 
         if (!data) return { status: 'ignored' };
 
-        // Verify Cashfree webhook signature
+        // Verify Cashfree webhook signature using raw body + x-cashfree-signature/timestamp headers
         const cfSecret = this.config.get('CASHFREE_WEBHOOK_SECRET', '');
-        if (cfSecret && body._rawBody && body._signature) {
-            const ts = body._timestamp || '';
-            const rawBody = body._rawBody;
+        if (cfSecret) {
+            if (!rawBody || !signature) {
+                this.logger.warn('Cashfree webhook: missing raw body or signature — rejecting');
+                return { status: 'invalid_signature' };
+            }
             const expectedSig = crypto
                 .createHmac('sha256', cfSecret)
-                .update(ts + rawBody)
+                .update(timestamp + rawBody)
                 .digest('base64');
-            if (expectedSig !== body._signature) {
-                this.logger.warn('Cashfree webhook: invalid signature — ignoring');
+            if (expectedSig !== signature) {
+                this.logger.warn('Cashfree webhook: invalid signature — rejecting');
                 return { status: 'invalid_signature' };
             }
         }
@@ -484,7 +503,9 @@ export class BillingService {
                             gatewayPaymentId: data.payment?.cf_payment_id?.toString(),
                         },
                     });
-                    await this.handlePaymentSuccess(payment);
+                    // Re-fetch updated payment to pass correct status to handler
+                    const updatedPayment = await this.prisma.payment.findUnique({ where: { id: payment.id } });
+                    await this.handlePaymentSuccess(updatedPayment);
                     this.logger.log(`Cashfree webhook: Order ${orderId} paid`);
                 }
             }

@@ -43,7 +43,7 @@ export default function ServerDetailPage() {
     const [databases, setDatabases] = useState<any[]>([]);
     const [newDbName, setNewDbName] = useState('');
     const [network, setNetwork] = useState<any[]>([]);
-    const [startup, setStartup] = useState<any>(null);
+    const [startup, setStartup] = useState<any[]>([]);
     const [startupValues, setStartupValues] = useState<Record<string, string>>({});
     const [pluginSearch, setPluginSearch] = useState('');
     const [pluginResults, setPluginResults] = useState<any[]>([]);
@@ -732,13 +732,13 @@ export default function ServerDetailPage() {
                 {/* Startup */}
                 {tab === 'startup' && (
                     <div>
-                        {startup?.data?.map((v: any, i: number) => {
-                            const envKey = v.attributes?.env_variable;
-                            const currentValue = startupValues[envKey] ?? v.attributes?.server_value ?? v.attributes?.default_value ?? '';
+                        {startup?.map((v: any, i: number) => {
+                            const envKey = v.env_variable;
+                            const currentValue = startupValues[envKey] ?? v.server_value ?? v.default_value ?? '';
                             return (
                                 <div key={i} className="mb-4">
                                     <div className="flex items-center justify-between mb-1">
-                                        <label className="text-sm text-gray-400">{v.attributes?.name}</label>
+                                        <label className="text-sm text-gray-400">{v.name}</label>
                                         <span className="text-xs text-gray-600 font-mono">{envKey}</span>
                                     </div>
                                     <div className="flex gap-2">
@@ -746,7 +746,7 @@ export default function ServerDetailPage() {
                                             className="input-field flex-1"
                                             value={currentValue}
                                             onChange={(e) => setStartupValues((prev) => ({ ...prev, [envKey]: e.target.value }))}
-                                            aria-label={v.attributes?.name || 'Startup variable'}
+                                            aria-label={v.name || 'Startup variable'}
                                         />
                                         <button
                                             onClick={() => saveStartupVariable(envKey, currentValue)}
@@ -756,13 +756,13 @@ export default function ServerDetailPage() {
                                             <Save className="w-4 h-4" />
                                         </button>
                                     </div>
-                                    {v.attributes?.description && (
-                                        <p className="text-xs text-gray-600 mt-1">{v.attributes.description}</p>
+                                    {v.description && (
+                                        <p className="text-xs text-gray-600 mt-1">{v.description}</p>
                                     )}
                                 </div>
                             );
                         })}
-                        {(!startup?.data || startup.data.length === 0) && <p className="text-gray-500 text-center py-8">No startup variables</p>}
+                        {(!startup || startup.length === 0) && <p className="text-gray-500 text-center py-8">No startup variables</p>}
                     </div>
                 )}
 

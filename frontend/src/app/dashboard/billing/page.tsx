@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { billingApi } from '@/lib/api';
 import { CreditCard, Clock, CheckCircle, XCircle, Banknote, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -18,6 +19,7 @@ function loadRazorpayScript(): Promise<boolean> {
 }
 
 export default function BillingPage() {
+    const searchParams = useSearchParams();
     const [payments, setPayments] = useState<any[]>([]);
     const [gateways, setGateways] = useState<any>({});
     const [balance, setBalance] = useState(0);
@@ -34,6 +36,27 @@ export default function BillingPage() {
             billingApi.balance().then((r) => setBalance(r.data?.balance ?? r.data ?? 0)),
         ]).finally(() => setLoading(false));
     }, []);
+
+    // Auto-verify Cashfree payment when redirected back with cf_order_id
+    useEffect(() => {
+        const cfOrderId = searchParams.get('cf_order_id');
+        if (cfOrderId) {
+            billingApi.cashfreeVerify(cfOrderId)
+                .then((r) => {
+                    if (r.data?.success) {
+                        toast.success('Cashfree payment verified!');
+                        refreshData();
+                    } else {
+                        toast.error('Payment not yet confirmed. It may take a moment.');
+                    }
+                })
+                .catch(() => toast.error('Payment verification failed'))
+                .finally(() => {
+                    // Clean up the URL query param
+                    window.history.replaceState({}, '', '/dashboard/billing');
+                });
+        }
+    }, [searchParams]);
 
     const refreshData = () => {
         billingApi.balance().then((r) => setBalance(r.data?.balance ?? r.data ?? 0)).catch(() => { });

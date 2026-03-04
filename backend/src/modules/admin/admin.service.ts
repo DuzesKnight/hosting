@@ -343,42 +343,47 @@ export class AdminService {
     /** Sync plans from Datalix API into local DB (upserts by datalixPlanName) */
     async syncVpsPlansFromDatalix() {
         const datalixPlans = await this.vpsService.fetchDatalixPlans();
-        if (!datalixPlans.length) return { synced: 0, message: 'No plans returned from Datalix (is DATALIX_ENABLED=true?)' };
+        if (!datalixPlans.length) return { synced: 0, message: 'No plans returned from Datalix (is DATALIX_ENABLED=true and DATALIX_KVM_LINE set?)' };
 
         const results: any[] = [];
         for (const dp of datalixPlans) {
-            const planName = dp.name || dp.plan || dp.id?.toString();
-            if (!planName) continue;
+            // Datalix KVMLineResponse fields: id (UUID), displayname, cores, memory (MB),
+            // disk (MB), traffic, price, uplink, line, ghzbase, ghzturbo, active, ...
+            const planId = dp.id;
+            if (!planId) continue;
 
-            const existing = await this.prisma.vpsPlan.findUnique({ where: { datalixPlanName: planName } });
+            // Skip inactive plans on Datalix side
+            if (dp.active === 0) continue;
+
+            const existing = await this.prisma.vpsPlan.findUnique({ where: { datalixPlanName: planId } });
 
             const specs = {
-                ram: dp.ram || dp.memory || 0,
-                cpu: dp.cpu || dp.cores || dp.vcpu || 0,
-                disk: dp.disk || dp.storage || 0,
-                bandwidth: dp.bandwidth || dp.traffic || 0,
-                costPrice: dp.price || dp.price_monthly || dp.priceMonth || 0,
+                ram: dp.memory || 0,              // Memory in MB
+                cpu: dp.cores || 0,               // vCPU cores
+                disk: Math.round((dp.disk || 0) / 1024), // Datalix sends disk in MB, convert to GB
+                bandwidth: dp.traffic || 0,       // Traffic units
+                costPrice: dp.price || 0,         // What Datalix charges (EUR)
             };
 
             if (existing) {
-                // Update specs + cost from Datalix, keep admin's sell price & name
+                // Update specs + cost from Datalix, keep admin's sell price & display name
                 const updated = await this.prisma.vpsPlan.update({
                     where: { id: existing.id },
                     data: { ...specs },
                 });
-                results.push({ plan: planName, action: 'updated', id: updated.id });
+                results.push({ plan: dp.displayname || planId, action: 'updated', id: updated.id });
             } else {
                 // New plan: default sell price = cost * 1.5 (50% markup)
                 const created = await this.prisma.vpsPlan.create({
                     data: {
-                        datalixPlanName: planName,
-                        displayName: dp.display_name || dp.label || planName,
-                        description: dp.description || null,
+                        datalixPlanName: planId,       // Datalix packet UUID
+                        displayName: dp.displayname || `KVM ${specs.cpu}C/${specs.ram}MB`,
+                        description: dp.ghzbase ? `${dp.cores} Cores @ ${dp.ghzbase} GHz (Turbo: ${dp.ghzturbo} GHz)` : null,
                         ...specs,
                         sellPrice: Math.ceil((specs.costPrice || 1) * 1.5),
                     },
                 });
-                results.push({ plan: planName, action: 'created', id: created.id });
+                results.push({ plan: dp.displayname || planId, action: 'created', id: created.id });
             }
         }
 

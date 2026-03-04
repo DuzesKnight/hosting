@@ -23,9 +23,29 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                 message = (exResponse as any).message || message;
                 errors = (exResponse as any).errors;
             }
+
+            // Log client errors (4xx) at warn level, server errors (5xx) at error level
+            if (status >= 500) {
+                this.logger.error(
+                    `${request.method} ${request.url} → ${status} ${message}`,
+                    exception.stack,
+                );
+            } else if (status >= 400) {
+                this.logger.warn(
+                    `${request.method} ${request.url} → ${status} ${typeof message === 'string' ? message : JSON.stringify(message)}`,
+                );
+            }
         } else if (exception instanceof Error) {
-            // Don't leak internal error details to clients
-            this.logger.error(`Unhandled: ${exception.message}`, exception.stack);
+            // Don't leak internal error details to clients, but ALWAYS log fully
+            this.logger.error(
+                `${request.method} ${request.url} → 500 Unhandled: ${exception.message}`,
+                exception.stack,
+            );
+        } else {
+            // Non-Error exceptions (strings, objects, etc.) — log them too
+            this.logger.error(
+                `${request.method} ${request.url} → 500 Unknown exception: ${JSON.stringify(exception)}`,
+            );
         }
 
         response.status(status).json({

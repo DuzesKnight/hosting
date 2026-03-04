@@ -22,6 +22,10 @@ function CreateServerPageInner() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const planId = searchParams.get('plan');
+    const customRam = searchParams.get('ram') ? Number(searchParams.get('ram')) : null;
+    const customCpu = searchParams.get('cpu') ? Number(searchParams.get('cpu')) : null;
+    const customDisk = searchParams.get('disk') ? Number(searchParams.get('disk')) : null;
+    const isCustom = customRam !== null || customCpu !== null || customDisk !== null;
 
     const [plan, setPlan] = useState<any>(null);
     const [eggs, setEggs] = useState<any[]>([]);
@@ -30,16 +34,31 @@ function CreateServerPageInner() {
     const [selectedEgg, setSelectedEgg] = useState<any>(null);
     const [selectedNode, setSelectedNode] = useState<number | null>(null);
     const [creating, setCreating] = useState(false);
+    const [customPrice, setCustomPrice] = useState<number | null>(null);
 
     useEffect(() => {
         if (!planId) return;
-        plansApi.list().then((r) => {
-            const found = (r.data || []).find((p: any) => p.id === planId);
-            setPlan(found);
-        });
+        plansApi.get(planId).then((r) => {
+            setPlan(r.data);
+            // If custom plan, fetch price for the custom specs
+            if (isCustom && r.data) {
+                plansApi.calculate({
+                    planId,
+                    ram: customRam || r.data.ram,
+                    cpu: customCpu || r.data.cpu,
+                    disk: customDisk || r.data.disk,
+                }).then((calc) => {
+                    setCustomPrice(calc.data?.price || 0);
+                }).catch(() => {});
+            }
+        }).catch(() => {});
         plansApi.eggs().then((r) => setEggs(r.data || [])).catch(() => { });
         plansApi.nodes().then((r) => setNodes(r.data || [])).catch(() => { });
-    }, [planId]);
+    }, [planId, isCustom, customRam, customCpu, customDisk]);
+
+    const displayRam = isCustom ? (customRam || plan?.ram || 0) : (plan?.ram || 0);
+    const displayCpu = isCustom ? (customCpu || plan?.cpu || 0) : (plan?.cpu || 0);
+    const displayDisk = isCustom ? (customDisk || plan?.disk || 0) : (plan?.disk || 0);
 
     const createServer = async () => {
         if (!serverName.trim()) return toast.error('Enter a server name');
@@ -48,13 +67,22 @@ function CreateServerPageInner() {
 
         setCreating(true);
         try {
-            await serversApi.create({
+            const payload: any = {
                 name: serverName,
                 planId,
                 eggId: selectedEgg.id,
                 nestId: selectedEgg.nestId,
                 nodeId: selectedNode,
-            });
+            };
+
+            // Pass custom specs for custom builder
+            if (isCustom) {
+                if (customRam) payload.ram = customRam;
+                if (customCpu) payload.cpu = customCpu;
+                if (customDisk) payload.disk = customDisk;
+            }
+
+            await serversApi.create(payload);
             toast.success('Server created! Deploying...');
             router.push('/dashboard/servers');
         } catch (e: any) {
@@ -81,7 +109,7 @@ function CreateServerPageInner() {
 
             <h1 className="text-2xl font-display font-bold mb-2">Create Server</h1>
             <p className="text-gray-400 mb-8">
-                {plan ? `${plan.name} — ${plan.ram}MB RAM · ${plan.cpu}% CPU · ${plan.disk}MB Disk` : 'Loading plan...'}
+                {plan ? `${plan.name}${isCustom ? ' (Custom)' : ''} — ${displayRam}MB RAM · ${displayCpu}% CPU · ${displayDisk}MB Disk` : 'Loading plan...'}
             </p>
 
             <div className="glass-card p-6 space-y-6">
@@ -139,16 +167,22 @@ function CreateServerPageInner() {
                 <div className="bg-white/5 rounded-xl p-4">
                     <h4 className="text-sm font-medium text-gray-300 mb-2">Summary</h4>
                     <div className="text-sm text-gray-400 space-y-1">
-                        <p>Plan: <span className="text-white">{plan?.name || '...'}</span></p>
+                        <p>Plan: <span className="text-white">{plan?.name || '...'}{isCustom ? ' (Custom)' : ''}</span></p>
                         <p>Game: <span className="text-white">{selectedEgg?.name || 'Not selected'}</span></p>
-                        <p>Price: <span className="text-primary font-bold">{plan?.type === 'FREE' ? 'Free' : `₹${plan?.pricePerMonth}/mo`}</span></p>
+                        <p>RAM: <span className="text-white">{displayRam}MB ({(displayRam / 1024).toFixed(1)}GB)</span></p>
+                        <p>CPU: <span className="text-white">{displayCpu}%</span></p>
+                        <p>Disk: <span className="text-white">{displayDisk}MB ({(displayDisk / 1024).toFixed(1)}GB)</span></p>
+                        <p>Price: <span className="text-primary font-bold">
+                            {plan?.type === 'FREE' ? 'Free' : `₹${isCustom && customPrice !== null ? customPrice : plan?.pricePerMonth || 0}/mo`}
+                        </span></p>
                     </div>
                 </div>
 
                 {/* Create Button */}
                 <button
                     onClick={createServer}
-                    disabled={creating || !serverName || !selectedEgg}                    className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                    disabled={creating || !serverName || !selectedEgg}
+                    className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                     {creating ? <><Loader2 className="w-4 h-4 animate-spin" /> Deploying...</> : <><Server className="w-4 h-4" /> Deploy Server</>}
                 </button>

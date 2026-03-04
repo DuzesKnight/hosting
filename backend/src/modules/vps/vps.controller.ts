@@ -22,6 +22,12 @@ export class VpsController {
     @Get('plans')
     getPlans() { return this.vpsService.getPlans(); }
 
+    /** Get available OS images for a specific plan (fetches from Datalix API) */
+    @Get('plans/:planId/os')
+    getOsForPlan(@Param('planId') planId: string) {
+        return this.vpsService.getOsForPlan(planId);
+    }
+
     @Get()
     getMyVps(@CurrentUser() user: any) { return this.vpsService.getUserVps(user.id); }
 
@@ -40,6 +46,12 @@ export class VpsController {
     async control(@CurrentUser() user: any, @Param('id') id: string, @Body('action') action: any) {
         await this.verifyVpsOwnership(user.id, id);
         return this.vpsService.controlVps(id, action);
+    }
+
+    @Post(':id/reinstall')
+    async reinstall(@CurrentUser() user: any, @Param('id') id: string, @Body('os') os: string) {
+        await this.verifyVpsOwnership(user.id, id);
+        return this.vpsService.reinstallVps(id, os);
     }
 
     @Post(':id/renew')

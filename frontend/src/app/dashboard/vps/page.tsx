@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { vpsApi, billingApi } from '@/lib/api';
-import { Server, Plus, Power, Square, Trash2, RefreshCw, Clock, Wallet } from 'lucide-react';
+import { Server, Plus, Power, Square, Trash2, RefreshCw, Clock, Wallet, RotateCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function VpsPage() {
@@ -12,19 +12,12 @@ export default function VpsPage() {
     const [showCreate, setShowCreate] = useState(false);
     const [selectedPlan, setSelectedPlan] = useState<any>(null);
     const [hostname, setHostname] = useState('');
-    const [os, setOs] = useState('ubuntu-22.04');
+    const [os, setOs] = useState('');
+    const [osList, setOsList] = useState<any[]>([]);
+    const [osLoading, setOsLoading] = useState(false);
     const [balance, setBalance] = useState(0);
     const [creating, setCreating] = useState(false);
     const [renewingId, setRenewingId] = useState<string | null>(null);
-
-    const availableOs = [
-        { value: 'ubuntu-22.04', label: 'Ubuntu 22.04 LTS' },
-        { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 LTS' },
-        { value: 'debian-12', label: 'Debian 12' },
-        { value: 'centos-9', label: 'CentOS Stream 9' },
-        { value: 'almalinux-9', label: 'AlmaLinux 9' },
-        { value: 'rocky-9', label: 'Rocky Linux 9' },
-    ];
 
     useEffect(() => {
         Promise.all([
@@ -34,6 +27,28 @@ export default function VpsPage() {
         ]).finally(() => setLoading(false));
     }, []);
 
+    // Fetch available OS when plan is selected
+    useEffect(() => {
+        if (!selectedPlan) {
+            setOsList([]);
+            setOs('');
+            return;
+        }
+        setOsLoading(true);
+        setOs('');
+        vpsApi.planOs(selectedPlan.id)
+            .then((r) => {
+                const list = r.data || [];
+                setOsList(list);
+                if (list.length > 0) setOs(list[0].id);
+            })
+            .catch(() => {
+                setOsList([]);
+                toast.error('Failed to load OS options for this plan');
+            })
+            .finally(() => setOsLoading(false));
+    }, [selectedPlan?.id]);
+
     const refreshList = () => {
         vpsApi.list().then((r) => setVpsList(r.data || []));
         billingApi.balance().then((r) => setBalance(r.data?.balance ?? r.data ?? 0));
@@ -41,6 +56,7 @@ export default function VpsPage() {
 
     const createVps = async () => {
         if (!selectedPlan) return toast.error('Select a plan');
+        if (!os) return toast.error('Select an operating system');
         if (!hostname.trim()) return toast.error('Enter a hostname');
         if (balance < selectedPlan.price) return toast.error(`Insufficient balance. Need ₹${selectedPlan.price}, have ₹${balance.toFixed(2)}`);
         setCreating(true);
@@ -59,7 +75,7 @@ export default function VpsPage() {
     const powerAction = async (id: string, action: string) => {
         try {
             await vpsApi.control(id, action);
-            toast.success(`${action} sent`);
+            toast.success(`${action} command sent`);
             setTimeout(refreshList, 3000);
         } catch (e: any) {
             toast.error(e?.response?.data?.message || 'Action failed');
@@ -86,10 +102,10 @@ export default function VpsPage() {
         } catch { toast.error('Termination failed'); }
     };
 
+    const formatRam = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB` : `${mb} MB`;
     const daysRemaining = (expiresAt: string | null) => {
         if (!expiresAt) return null;
-        const days = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-        return days;
+        return Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     };
 
     if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>;
@@ -131,7 +147,7 @@ export default function VpsPage() {
                                             }`}>
                                         <p className="font-semibold">{plan.name}</p>
                                         <p className="text-sm text-gray-400 mt-1">
-                                            {plan.ram}MB RAM · {plan.cpu} vCPU · {plan.disk}GB Disk
+                                            {formatRam(plan.ram)} RAM · {plan.cpu} vCPU · {plan.disk}GB Disk
                                             {plan.bandwidth > 0 && ` · ${plan.bandwidth}TB BW`}
                                         </p>
                                         <p className="text-primary font-bold mt-2">₹{plan.price}/mo</p>
@@ -149,12 +165,23 @@ export default function VpsPage() {
                                 </div>
                                 <div>
                                     <label htmlFor="vps-os" className="text-sm font-medium text-gray-300 mb-2 block">Operating System</label>
-                                    <select id="vps-os" value={os} onChange={(e) => setOs(e.target.value)}
-                                        className="input-field w-full bg-dark">
-                                        {availableOs.map((o) => (
-                                            <option key={o.value} value={o.value}>{o.label}</option>
-                                        ))}
-                                    </select>
+                                    {osLoading ? (
+                                        <div className="input-field w-full flex items-center gap-2 text-gray-500">
+                                            <div className="w-4 h-4 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+                                            Loading OS options...
+                                        </div>
+                                    ) : osList.length > 0 ? (
+                                        <select id="vps-os" value={os} onChange={(e) => setOs(e.target.value)}
+                                            className="input-field w-full bg-dark">
+                                            {osList.map((o: any) => (
+                                                <option key={o.id} value={o.id}>{o.name}</option>
+                                            ))}
+                                        </select>
+                                    ) : selectedPlan ? (
+                                        <div className="input-field w-full text-gray-500">No OS available — select a different plan</div>
+                                    ) : (
+                                        <div className="input-field w-full text-gray-500">Select a plan first</div>
+                                    )}
                                 </div>
                             </div>
                             {selectedPlan && (
@@ -162,7 +189,7 @@ export default function VpsPage() {
                                     <span className="font-medium text-white">Summary:</span> {selectedPlan.name} — ₹{selectedPlan.price}/mo will be deducted from your balance. Renews monthly.
                                 </div>
                             )}
-                            <button onClick={createVps} disabled={creating || !selectedPlan}
+                            <button onClick={createVps} disabled={creating || !selectedPlan || !os}
                                 className="btn-primary disabled:opacity-50">
                                 {creating ? 'Deploying...' : `Deploy VPS${selectedPlan ? ` — ₹${selectedPlan.price}` : ''}`}
                             </button>
@@ -195,7 +222,7 @@ export default function VpsPage() {
                                         }`} />
                                     <div className="flex-1 min-w-0">
                                         <h3 className="font-semibold">{vps.hostname || vps.planName}</h3>
-                                        <p className="text-sm text-gray-500">{vps.ip || 'Provisioning...'} · {vps.os || 'Ubuntu 22.04'}</p>
+                                        <p className="text-sm text-gray-500">{vps.ip || 'Provisioning...'} · {vps.os || 'N/A'}</p>
                                     </div>
                                     <span className={`text-xs font-medium px-3 py-1 rounded-full ${vps.status === 'ACTIVE' ? 'bg-green-500/10 text-green-400' :
                                             vps.status === 'PROVISIONING' ? 'bg-blue-500/10 text-blue-400' :
@@ -204,7 +231,7 @@ export default function VpsPage() {
                                 </div>
 
                                 <div className="flex flex-wrap gap-4 text-sm text-gray-400 mb-4">
-                                    {vps.ram && <span>{vps.ram}MB RAM</span>}
+                                    {vps.ram && <span>{formatRam(vps.ram)} RAM</span>}
                                     {vps.cpu && <span>{vps.cpu} vCPU</span>}
                                     {vps.disk && <span>{vps.disk}GB Disk</span>}
                                     {vps.bandwidth > 0 && <span>{vps.bandwidth}TB BW</span>}
@@ -234,9 +261,10 @@ export default function VpsPage() {
                                             <button onClick={() => powerAction(vps.id, 'start')} className="p-2 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20" title="Start"><Power className="w-4 h-4" /></button>
                                             <button onClick={() => powerAction(vps.id, 'stop')} className="p-2 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20" title="Stop"><Square className="w-4 h-4" /></button>
                                             <button onClick={() => powerAction(vps.id, 'restart')} className="p-2 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20" title="Restart"><RefreshCw className="w-4 h-4" /></button>
+                                            <button onClick={() => powerAction(vps.id, 'shutdown')} className="p-2 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20" title="Graceful Shutdown"><RotateCcw className="w-4 h-4" /></button>
                                         </>
                                     )}
-                                    {/* Renew button — visible for active, suspended, or expired */}
+                                    {/* Renew button */}
                                     {(vps.status === 'ACTIVE' || vps.status === 'SUSPENDED') && vps.sellPrice > 0 && (
                                         <button
                                             onClick={() => renewVps(vps.id)}

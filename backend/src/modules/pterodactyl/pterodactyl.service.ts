@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import axios, { AxiosInstance } from 'axios';
 
 /**
@@ -69,10 +70,17 @@ export class PterodactylService {
         last_name: string;
     }): Promise<any> {
         try {
-            const { data } = await this.api.post('/users', userData);
+            // Pterodactyl API requires a password field for user creation.
+            // Generate a strong random password — users authenticate through our platform,
+            // not directly to Pterodactyl, so this password is never exposed.
+            const password = randomBytes(24).toString('base64url');
+            const { data } = await this.api.post('/users', { ...userData, password });
             return data.attributes;
         } catch (e) {
             this.logger.error(`Failed to create user: ${e.message}`);
+            if (e.response?.data) {
+                this.logger.error(`Pterodactyl response: ${JSON.stringify(e.response.data)}`);
+            }
             return null;
         }
     }
@@ -122,11 +130,18 @@ export class PterodactylService {
         deploy?: { locations: number[]; dedicated_ip: boolean; port_range: string[] };
     }): Promise<any> {
         try {
-            const { data } = await this.api.post('/servers', serverData);
+            // Ensure oom_disabled is set (prevents OOM killer from terminating game servers)
+            const payload = {
+                ...serverData,
+                oom_disabled: true,
+            };
+            const { data } = await this.api.post('/servers', payload);
             return data.attributes;
         } catch (e) {
             this.logger.error(`Failed to create server: ${e.message}`);
-            this.logger.error(JSON.stringify(e.response?.data || {}));
+            if (e.response?.data) {
+                this.logger.error(`Pterodactyl response: ${JSON.stringify(e.response.data)}`);
+            }
             return null;
         }
     }
@@ -157,6 +172,11 @@ export class PterodactylService {
             await this.api.delete(url);
             return true;
         } catch (e) {
+            // If soft delete fails and we haven't tried force yet, retry with force
+            if (!force && e.response?.status && e.response.status >= 500) {
+                this.logger.warn(`Soft delete failed for server ${id}, retrying with force delete...`);
+                return this.deleteServer(id, true);
+            }
             this.logger.error(`Failed to delete server ${id}: ${e.message}`);
             return false;
         }
@@ -171,13 +191,35 @@ export class PterodactylService {
         feature_limits: { databases: number; backups: number; allocations: number };
     }): Promise<any> {
         try {
-            const { data } = await this.api.patch(`/servers/${id}/build`, {
-                allocation: 0, // keep existing
-                ...build,
-            });
+            // First get the server to find its current default allocation
+            // Pterodactyl PATCH /servers/{id}/build requires the `allocation` field (default allocation ID)
+            const server = await this.getServerById(id);
+            const defaultAllocation = server?.relationships?.allocations?.data?.[0]?.attributes?.id
+                || server?.allocation;
+
+            if (!defaultAllocation) {
+                this.logger.error(`Cannot update build for server ${id}: no default allocation found`);
+                return null;
+            }
+
+            const payload = {
+                allocation: defaultAllocation,
+                memory: build.memory,
+                swap: build.swap,
+                disk: build.disk,
+                io: build.io,
+                cpu: build.cpu,
+                feature_limits: build.feature_limits,
+                oom_disabled: true,
+            };
+
+            const { data } = await this.api.patch(`/servers/${id}/build`, payload);
             return data.attributes;
         } catch (e) {
             this.logger.error(`Failed to update server build ${id}: ${e.message}`);
+            if (e.response?.data) {
+                this.logger.error(`Pterodactyl response: ${JSON.stringify(e.response.data)}`);
+            }
             return null;
         }
     }
@@ -212,6 +254,34 @@ export class PterodactylService {
             this.logger.error(`Failed to get allocations for node ${nodeId}: ${e.message}`);
             return null;
         }
+    }
+
+    /**
+     * Find a free (unassigned) allocation on a node, paginating through all pages
+     */
+    async findFreeAllocation(nodeId: number): Promise<{ id: number; ip: string; port: number } | null> {
+        let page = 1;
+        const maxPages = 50; // safety limit
+        while (page <= maxPages) {
+            const result = await this.getNodeAllocations(nodeId, page);
+            if (!result?.data?.length) return null;
+
+            for (const alloc of result.data) {
+                if (!alloc.attributes.assigned) {
+                    return {
+                        id: alloc.attributes.id,
+                        ip: alloc.attributes.ip,
+                        port: alloc.attributes.port,
+                    };
+                }
+            }
+
+            // Check if there are more pages
+            const meta = result.meta?.pagination;
+            if (!meta || page >= meta.total_pages) break;
+            page++;
+        }
+        return null;
     }
 
     // ========== NESTS & EGGS ==========
@@ -251,7 +321,13 @@ export class PterodactylService {
         const allEggs: any[] = [];
         for (const nest of nests) {
             const eggs = await this.getEggs(nest.id);
-            allEggs.push(...eggs.map((egg) => ({ ...egg, nestId: nest.id, nestName: nest.name })));
+            allEggs.push(...eggs.map((egg) => ({
+                ...egg,
+                nestId: nest.id,
+                nestName: nest.name,
+                // Normalize docker image — Pterodactyl v1 uses docker_image, v1.7+ uses docker_images map
+                docker_image: egg.docker_image || (egg.docker_images ? Object.values(egg.docker_images)[0] : null),
+            })));
         }
         return allEggs;
     }

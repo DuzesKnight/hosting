@@ -198,7 +198,7 @@ export class PluginsService {
             const downloadUrl = `${this.spigetApi}/resources/${resourceId}/download`;
             const { data: fileData, headers } = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
 
-            const fileName = headers['content-disposition']?.match(/filename="?(.+)"?/)?.[1] || `plugin_${resourceId}.jar`;
+            const fileName = headers['content-disposition']?.match(/filename="?([^";\s]+)"?/)?.[1] || `plugin_${resourceId}.jar`;
             const installDir = '/plugins';
 
             const uploadUrl = await this.pterodactylClient.uploadFileUrl(serverUuid, installDir);

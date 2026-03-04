@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, UseGuards, Param, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Param, Req, BadRequestException, RawBodyRequest } from '@nestjs/common';
+import { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
 import { BillingService } from './billing.service';
@@ -48,6 +49,7 @@ export class BillingController {
     }
 
     @Post('razorpay/verify')
+    @UseGuards(JwtAuthGuard)
     verifyRazorpay(@Body() body: any) {
         return this.billingService.verifyRazorpayPayment(body);
     }
@@ -61,6 +63,7 @@ export class BillingController {
     }
 
     @Post('cashfree/verify')
+    @UseGuards(JwtAuthGuard)
     verifyCashfree(@Body('orderId') orderId: string) {
         return this.billingService.verifyCashfreePayment(orderId);
     }
@@ -79,14 +82,19 @@ export class BillingController {
         return this.billingService.payWithBalance(user.id, body.amount, body.serverId);
     }
 
-    // --- Webhooks (server-to-server, no auth guard) ---
+    // --- Webhooks (server-to-server, no auth guard — verified by HMAC signature) ---
     @Post('razorpay/webhook')
-    async razorpayWebhook(@Body() body: any) {
-        return this.billingService.handleRazorpayWebhook(body);
+    async razorpayWebhook(@Body() body: any, @Req() req: RawBodyRequest<Request>) {
+        const rawBody = req.rawBody?.toString('utf8') || '';
+        const signature = req.headers['x-razorpay-signature'] as string || '';
+        return this.billingService.handleRazorpayWebhook(body, rawBody, signature);
     }
 
     @Post('cashfree/webhook')
-    async cashfreeWebhook(@Body() body: any) {
-        return this.billingService.handleCashfreeWebhook(body);
+    async cashfreeWebhook(@Body() body: any, @Req() req: RawBodyRequest<Request>) {
+        const rawBody = req.rawBody?.toString('utf8') || '';
+        const signature = req.headers['x-cashfree-signature'] as string || '';
+        const timestamp = req.headers['x-cashfree-timestamp'] as string || '';
+        return this.billingService.handleCashfreeWebhook(body, rawBody, signature, timestamp);
     }
 }

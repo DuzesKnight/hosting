@@ -103,7 +103,44 @@ spinner() {
 
 env_get() {
   local file=$1 key=$2
-  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
+}
+
+# ─── URL Resolution (same logic as install.sh) ───────────
+resolve_base_url() {
+  # Priority 1: APP_URL from .env
+  local app_url=$(env_get .env APP_URL 2>/dev/null)
+  if [ -n "$app_url" ] && [[ "$app_url" != *"localhost"* ]]; then
+    BASE_URL=$(echo "${app_url%/}" | sed -E 's|:[0-9]+$||')
+    URL_SOURCE="domain (.env APP_URL)"
+    return 0
+  fi
+
+  # Priority 2: VPS public IP
+  local public_ip=""
+  if command -v curl >/dev/null 2>&1; then
+    public_ip=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null || \
+                curl -s --max-time 3 https://ifconfig.me 2>/dev/null || \
+                curl -s --max-time 3 https://icanhazip.com 2>/dev/null || true)
+  fi
+  if [ -n "$public_ip" ] && [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    BASE_URL="http://${public_ip}"
+    URL_SOURCE="VPS public IP"
+    return 0
+  fi
+
+  # Priority 3: hostname -I
+  local host_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  if [ -n "$host_ip" ] && [ "$host_ip" != "127.0.0.1" ]; then
+    BASE_URL="http://${host_ip}"
+    URL_SOURCE="server IP"
+    return 0
+  fi
+
+  # Priority 4: localhost fallback
+  BASE_URL="http://localhost"
+  URL_SOURCE="localhost (fallback)"
+  return 0
 }
 
 # ─── Parse Arguments ──────────────────────────────────────
@@ -423,6 +460,40 @@ BE_PORT=$(env_get .env BACKEND_PORT)
 FE_PORT=${FE_PORT:-3000}
 BE_PORT=${BE_PORT:-4000}
 
+# Resolve real accessible URLs
+resolve_base_url
+
+IS_NGINX_PROXIED=false
+if [[ "$URL_SOURCE" != "localhost"* ]]; then
+  IS_NGINX_PROXIED=true
+fi
+
+if $IS_NGINX_PROXIED; then
+  FRONTEND_URL="${BASE_URL}"
+  BACKEND_URL="${BASE_URL}/api"
+  HEALTH_URL="${BASE_URL}/api/health"
+else
+  FRONTEND_URL="${BASE_URL}:${FE_PORT}"
+  BACKEND_URL="${BASE_URL}:${BE_PORT}"
+  HEALTH_URL="${BASE_URL}:${BE_PORT}/api/health"
+fi
+
+# Build OAuth callback URLs
+if $IS_NGINX_PROXIED; then
+  CALLBACK_BASE="${BASE_URL}"
+else
+  CALLBACK_BASE="${BASE_URL}:${BE_PORT}"
+fi
+GOOGLE_REDIRECT="${CALLBACK_BASE}/api/auth/google/callback"
+DISCORD_REDIRECT="${CALLBACK_BASE}/api/auth/discord/callback"
+
+# Detect IP-based callback
+CALLBACK_HOST=$(echo "$CALLBACK_BASE" | sed -E 's|^https?://||' | cut -d: -f1)
+IS_IP_BASED=false
+if [[ "$CALLBACK_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  IS_IP_BASED=true
+fi
+
 echo ""
 echo -e "${GRAY}   ╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
@@ -431,15 +502,50 @@ if [ -n "$TARGET_SERVICE" ]; then
 else
   echo -e "${GRAY}   ║${NC}   ${GREEN}${BOLD}✔  All services restarted successfully!${NC}                     ${GRAY}║${NC}"
 fi
-echo -e "${GRAY}   ║${NC}   ${DIM}Completed in ${ELAPSED_FMT} · Volumes preserved${NC}                     ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${DIM}Completed in ${ELAPSED_FMT} · via ${URL_SOURCE}${NC}                  ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Frontend${NC}     http://localhost:${FE_PORT}                          ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Backend${NC}      http://localhost:${BE_PORT}                          ${GRAY}║${NC}"
-echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       http://localhost:${BE_PORT}/api/health                ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${WHITE}${BOLD}Access Points${NC}                                               ${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Website${NC}      ${FRONTEND_URL}${NC}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}API${NC}          ${BACKEND_URL}${NC}${GRAY}║${NC}"
+echo -e "${GRAY}   ║${NC}   ${CYAN}Health${NC}       ${HEALTH_URL}${NC}${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}   ${DIM}Logs: docker compose logs -f${NC}                                ${GRAY}║${NC}"
 echo -e "${GRAY}   ║${NC}                                                              ${GRAY}║${NC}"
 echo -e "${GRAY}   ╚══════════════════════════════════════════════════════════════╝${NC}"
+
+# ── OAuth URLs Quick Reference ───────────────────────────
+echo ""
+echo -e "${GRAY}   ┌─────────────────────────────────────────────────────────────${NC}"
+echo -e "${GRAY}   │${NC}  ${MAGENTA}${BOLD}⚡ OAuth Redirect URLs${NC}"
+echo -e "${GRAY}   ├─────────────────────────────────────────────────────────────${NC}"
+echo -e "${GRAY}   │${NC}"
+if $IS_IP_BASED; then
+  echo -e "${GRAY}   │${NC}  ${YELLOW}⚠ Google OAuth${NC} — ${RED}requires a domain (IP not allowed)${NC}"
+  echo -e "${GRAY}   │${NC}    ${DIM}Set APP_URL to your domain in .env, then re-run install.sh${NC}"
+else
+  echo -e "${GRAY}   │${NC}  ${CYAN}Google${NC}   ${WHITE}${BOLD}${GOOGLE_REDIRECT}${NC}"
+fi
+echo -e "${GRAY}   │${NC}  ${CYAN}Discord${NC}  ${WHITE}${BOLD}${DISCORD_REDIRECT}${NC}"
+echo -e "${GRAY}   │${NC}"
+
+# Show .env sync status for OAuth URLs
+CURRENT_GOOGLE_CB=$(env_get .env GOOGLE_CALLBACK_URL)
+CURRENT_DISCORD_CB=$(env_get .env DISCORD_CALLBACK_URL)
+OAUTH_SYNCED=true
+if [[ "$CURRENT_GOOGLE_CB" != "$GOOGLE_REDIRECT" ]] || [[ "$CURRENT_DISCORD_CB" != "$DISCORD_REDIRECT" ]]; then
+  OAUTH_SYNCED=false
+  echo -e "${GRAY}   │${NC}  ${YELLOW}⚠ .env callback URLs are out of sync${NC}"
+  echo -e "${GRAY}   │${NC}    ${DIM}Run ${BOLD}bash install.sh${NC}${DIM} to re-sync, or update .env manually:${NC}"
+  if [[ "$CURRENT_GOOGLE_CB" != "$GOOGLE_REDIRECT" ]]; then
+    echo -e "${GRAY}   │${NC}    ${DIM}GOOGLE_CALLBACK_URL=${GOOGLE_REDIRECT}${NC}"
+  fi
+  if [[ "$CURRENT_DISCORD_CB" != "$DISCORD_REDIRECT" ]]; then
+    echo -e "${GRAY}   │${NC}    ${DIM}DISCORD_CALLBACK_URL=${DISCORD_REDIRECT}${NC}"
+  fi
+  echo -e "${GRAY}   │${NC}"
+fi
+
+echo -e "${GRAY}   └─────────────────────────────────────────────────────────────${NC}"
 echo ""

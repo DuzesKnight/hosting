@@ -126,10 +126,12 @@ export const playersApi = {
 // VPS
 export const vpsApi = {
     plans: () => api.get('/vps/plans'),
+    planOs: (planId: string) => api.get(`/vps/plans/${planId}/os`),
     list: () => api.get('/vps'),
     create: (data: any) => api.post('/vps', data),
     get: (id: string) => api.get(`/vps/${id}`),
     control: (id: string, action: string) => api.post(`/vps/${id}/control`, { action }),
+    reinstall: (id: string, os: string) => api.post(`/vps/${id}/reinstall`, { os }),
     renew: (id: string) => api.post(`/vps/${id}/renew`),
     terminate: (id: string) => api.delete(`/vps/${id}`),
 };
