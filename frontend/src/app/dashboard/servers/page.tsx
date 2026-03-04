@@ -61,9 +61,9 @@ export default function ServersPage() {
                             <div className="flex-1 min-w-0">
                                 <h3 className="font-semibold text-lg truncate">{server.name}</h3>
                                 <div className="flex flex-wrap gap-4 mt-2 text-sm text-gray-400">
-                                    <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" />{server.ram}MB</span>
+                                    <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" />{server.ram >= 1024 ? `${(server.ram / 1024).toFixed(1)} GB` : `${server.ram} MB`}</span>
                                     <span className="flex items-center gap-1"><Cpu className="w-4 h-4" />{server.cpu}%</span>
-                                    <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" />{server.disk}MB</span>
+                                    <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" />{server.disk >= 1024 ? `${(server.disk / 1024).toFixed(1)} GB` : `${server.disk} MB`}</span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">

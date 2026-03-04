@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { billingApi } from '@/lib/api';
 import { CreditCard, Clock, CheckCircle, XCircle, Banknote, Loader2 } from 'lucide-react';
@@ -19,6 +19,18 @@ function loadRazorpayScript(): Promise<boolean> {
 }
 
 export default function BillingPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            </div>
+        }>
+            <BillingPageInner />
+        </Suspense>
+    );
+}
+
+function BillingPageInner() {
     const searchParams = useSearchParams();
     const [payments, setPayments] = useState<any[]>([]);
     const [gateways, setGateways] = useState<any>({});

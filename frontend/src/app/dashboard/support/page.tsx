@@ -57,8 +57,13 @@ export default function SupportPage() {
                         { q: 'My server is suspended, what do I do?', a: 'Server suspension is due to expired payment. Go to Billing and complete the renewal payment.' },
                     ].map((faq, i) => (
                         <details key={i} className="group">
-                            <summary className="p-4 rounded-lg bg-white/5 cursor-pointer text-sm font-medium hover:bg-white/10 transition-colors">{faq.q}</summary>
-                            <p className="text-sm text-gray-400 p-4 pt-2">{faq.a}</p>
+                            <summary className="p-4 rounded-lg bg-white/5 cursor-pointer text-sm font-medium hover:bg-white/10 transition-colors list-none flex items-center justify-between">
+                                {faq.q}
+                                <span className="text-gray-600 group-open:rotate-180 transition-transform duration-200 ml-2">▾</span>
+                            </summary>
+                            <div className="overflow-hidden">
+                                <p className="text-sm text-gray-400 px-4 pb-4 pt-2">{faq.a}</p>
+                            </div>
                         </details>
                     ))}
                 </div>

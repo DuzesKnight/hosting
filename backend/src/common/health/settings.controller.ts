@@ -10,6 +10,9 @@ const PUBLIC_KEYS = [
     'SUPPORT_EMAIL',
     'SITE_NAME',
     'SITE_DESCRIPTION',
+    'MAINTENANCE_MODE',
+    'TERMS_URL',
+    'PRIVACY_URL',
 ];
 
 @Controller('settings')

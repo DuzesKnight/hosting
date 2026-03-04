@@ -21,6 +21,7 @@ export const authApi = {
     forgotPassword: (email: string) => api.post('/auth/forgot-password', { email }),
     resetPassword: (token: string, password: string) => api.post('/auth/reset-password', { token, password }),
     resendVerification: (email: string) => api.post('/auth/resend-verification', { email }),
+    verifyEmail: (token: string) => api.get(`/auth/verify-email?token=${token}`),
 };
 
 // Servers
@@ -88,8 +89,11 @@ export const pluginsApi = {
     installed: (uuid: string) => api.get(`/plugins/${uuid}/installed`),
     checkUpdates: (uuid: string) => api.get(`/plugins/${uuid}/check-updates`),
     remove: (uuid: string, file: string) => api.delete(`/plugins/${uuid}/remove/${encodeURIComponent(file)}`),
-    modrinthSearch: (q: string, limit = 20, offset = 0) =>
-        api.get(`/plugins/modrinth/search?query=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`),
+    modrinthSearch: (q: string, limit = 20, offset = 0, loaders?: string[]) => {
+        let url = `/plugins/modrinth/search?query=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}&project_type=mod`;
+        if (loaders && loaders.length > 0) url += `&loaders=${encodeURIComponent(JSON.stringify(loaders))}`;
+        return api.get(url);
+    },
     modrinthProject: (id: string) => api.get(`/plugins/modrinth/project/${id}`),
     modrinthVersions: (id: string, loaders?: string[], gameVersions?: string[]) => {
         const params = new URLSearchParams();

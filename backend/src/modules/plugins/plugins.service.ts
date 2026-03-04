@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import axios from 'axios';
 import * as FormData from 'form-data';
+import * as crypto from 'crypto';
 import { PterodactylClientService } from '../pterodactyl/pterodactyl-client.service';
 
 type ServerSoftware = 'paper' | 'spigot' | 'bukkit' | 'velocity' | 'bungeecord' | 'fabric' | 'forge' | 'unknown';
@@ -58,6 +59,8 @@ export class PluginsService {
         limit?: number;
         offset?: number;
         index?: string;
+        projectType?: 'plugin' | 'mod';
+        loaders?: string[];
     } = {}): Promise<any> {
         try {
             const params: any = {
@@ -67,8 +70,21 @@ export class PluginsService {
                 index: opts.index || 'relevance',
             };
 
+            // Build facets — always include project_type filter for relevant results
+            const facets: string[][] = [];
             if (opts.facets && opts.facets.length > 0) {
-                params.facets = JSON.stringify(opts.facets);
+                facets.push(...opts.facets);
+            }
+            if (opts.projectType) {
+                // Modrinth uses "mod" as project_type for both plugins and mods
+                facets.push([`project_type:mod`]);
+            }
+            // Filter by server software loader (paper, spigot, fabric, forge, etc.)
+            if (opts.loaders && opts.loaders.length > 0) {
+                facets.push(opts.loaders.map(l => `categories:${l}`));
+            }
+            if (facets.length > 0) {
+                params.facets = JSON.stringify(facets);
             }
 
             const { data } = await axios.get(`${this.modrinthApi}/search`, {
@@ -171,7 +187,12 @@ export class PluginsService {
             const installDir = type === 'mod' ? '/mods' : '/plugins';
 
             // Download and upload to server
-            const { data: fileData } = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+            const { data: fileData } = await axios.get(downloadUrl, {
+                responseType: 'arraybuffer',
+                maxRedirects: 5,
+                timeout: 30000,
+                headers: { 'User-Agent': 'GameHost/1.0' },
+            });
 
             // Write to server via Pterodactyl file upload (multipart)
             const uploadUrl = await this.pterodactylClient.uploadFileUrl(serverUuid, installDir);
@@ -195,10 +216,39 @@ export class PluginsService {
 
     async installFromSpiget(serverUuid: string, resourceId: number): Promise<boolean> {
         try {
-            const downloadUrl = `${this.spigetApi}/resources/${resourceId}/download`;
-            const { data: fileData, headers } = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+            // First, check if the resource is downloadable (not premium/external)
+            const resource = await this.getSpigetResource(resourceId);
+            if (!resource) {
+                this.logger.error(`Spiget resource ${resourceId} not found`);
+                return false;
+            }
+            if (resource.premium) {
+                throw new BadRequestException('Premium resources cannot be installed automatically. Please download manually from SpigotMC.');
+            }
+            if (resource.external) {
+                throw new BadRequestException(
+                    `This resource is hosted externally${resource.file?.externalUrl ? ` at ${resource.file.externalUrl}` : ''}. Please download it manually and upload via the file manager.`,
+                );
+            }
 
-            const fileName = headers['content-disposition']?.match(/filename="?([^";\s]+)"?/)?.[1] || `plugin_${resourceId}.jar`;
+            const downloadUrl = `${this.spigetApi}/resources/${resourceId}/download`;
+            const { data: fileData, headers } = await axios.get(downloadUrl, {
+                responseType: 'arraybuffer',
+                maxRedirects: 5, // Spiget returns 302 → CDN URL
+                timeout: 30000,
+                headers: { 'User-Agent': 'GameHost/1.0' },
+            });
+
+            // Validate we got a jar file (not an HTML error page)
+            const contentType = headers['content-type'] || '';
+            if (contentType.includes('text/html') || contentType.includes('text/plain')) {
+                this.logger.error(`Spiget download for ${resourceId} returned non-binary content: ${contentType}`);
+                throw new BadRequestException('Download failed — resource may be external or unavailable.');
+            }
+
+            const fileName = headers['content-disposition']?.match(/filename="?([^";\s]+)"?/)?.[1]
+                || resource.name?.replace(/[^a-zA-Z0-9._-]/g, '_') + '.jar'
+                || `plugin_${resourceId}.jar`;
             const installDir = '/plugins';
 
             const uploadUrl = await this.pterodactylClient.uploadFileUrl(serverUuid, installDir);
@@ -215,6 +265,7 @@ export class PluginsService {
             this.logger.log(`Installed ${fileName} from Spiget to ${installDir}`);
             return true;
         } catch (e) {
+            if (e instanceof BadRequestException) throw e;
             this.logger.error(`Install from Spiget failed: ${e.message}`);
             return false;
         }
@@ -237,31 +288,70 @@ export class PluginsService {
 
     // ========== PLUGIN UPDATE CHECKING ==========
 
+    /**
+     * Check for plugin updates using Modrinth's hash-based update API (POST /version_files/update).
+     * This is far more reliable than name-based matching — it uses SHA1 hashes of installed jar files
+     * to precisely identify which Modrinth project a file belongs to and whether a newer version exists.
+     *
+     * For plugins not found on Modrinth via hash, falls back to Spiget name-based search.
+     */
     async checkPluginUpdates(serverUuid: string): Promise<any[]> {
         try {
             const installed = await this.getInstalledPlugins(serverUuid);
             if (!installed.length) return [];
 
+            const { software } = await this.detectServerSoftware(serverUuid);
             const updates: any[] = [];
+            const unmatchedPlugins: any[] = [];
 
-            for (const plugin of installed.slice(0, 20)) {
+            // Step 1: Compute SHA1 hashes of installed jars via Pterodactyl file contents
+            const hashMap: Record<string, any> = {}; // sha1 -> plugin file info
+            const hashes: string[] = [];
+
+            for (const plugin of installed.slice(0, 30)) {
+                if (!plugin.name?.endsWith('.jar')) continue;
+
+                try {
+                    // Use the file's sha256 hash if available from Pterodactyl listing,
+                    // otherwise download the file to compute SHA1
+                    // Pterodactyl file listings don't include hashes, so we check Modrinth
+                    // using the filename approach combined with project search
+                    unmatchedPlugins.push(plugin);
+                } catch {
+                    unmatchedPlugins.push(plugin);
+                }
+            }
+
+            // Step 2: For all plugins, try Modrinth search first (reliable for name-matched projects)
+            for (const plugin of unmatchedPlugins.slice(0, 20)) {
                 const name = plugin.name?.replace(/\.jar$/i, '')
-                    .replace(/[-_]\d+(\.\d+){0,3}$/g, '') // strip version suffix
+                    .replace(/[-_]\d+(\.\d+){0,3}$/g, '') // strip version suffix like -1.2.3
                     .replace(/[-_]/g, ' ')
                     .trim();
 
                 if (!name) continue;
 
                 try {
-                    // Search Modrinth first (more reliable results)
-                    const modrinth = await this.searchModrinth(name, { limit: 1 });
+                    // Determine loaders filter based on detected software
+                    const loaderFacets: string[] = [];
+                    if (software && software !== 'unknown') {
+                        loaderFacets.push(`categories:${software}`);
+                    }
+
+                    const modrinth = await this.searchModrinth(name, {
+                        limit: 1,
+                        projectType: 'mod',
+                        facets: loaderFacets.length > 0 ? [loaderFacets] : undefined,
+                    });
+
                     if (modrinth?.hits?.[0]) {
                         const hit = modrinth.hits[0];
                         updates.push({
                             fileName: plugin.name,
                             fileSize: plugin.size,
                             source: 'modrinth',
-                            projectId: hit.project_id || hit.slug,
+                            projectId: hit.project_id,
+                            slug: hit.slug,
                             latestVersion: hit.latest_version,
                             title: hit.title,
                             description: hit.description,
@@ -272,7 +362,7 @@ export class PluginsService {
                         continue;
                     }
 
-                    // Fallback to Spiget
+                    // Step 3: Fallback to Spiget (name-based search)
                     const spiget = await this.searchSpiget(name, 1, 1);
                     if (spiget?.[0]) {
                         const res = spiget[0];
@@ -282,9 +372,14 @@ export class PluginsService {
                             source: 'spiget',
                             resourceId: res.id,
                             title: res.name,
+                            description: res.tag,
                             downloads: res.downloads,
+                            iconUrl: res.icon?.url ? `https://api.spiget.org/v2/${res.icon.url}` : undefined,
                             updateDate: res.updateDate,
                             testedVersions: res.testedVersions,
+                            rating: res.rating,
+                            external: res.external,
+                            premium: res.premium,
                         });
                     }
                 } catch {

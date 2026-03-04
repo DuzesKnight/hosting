@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, Param, Req, BadRequestException, RawBodyRequest } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Param, Req, BadRequestException, RawBodyRequest, Query } from '@nestjs/common';
 import { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
@@ -27,17 +27,26 @@ export class BillingController {
     @Post('balance/add')
     @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(Role.ADMIN)
-    addBalance(@CurrentUser() user: any, @Body('amount') amount: number) {
+    addBalance(@CurrentUser() user: any, @Body() body: { amount: number; userId?: string }) {
+        const amount = body.amount;
         if (!amount || amount <= 0 || amount > 100000) {
             throw new BadRequestException('Amount must be between 1 and 100000');
         }
-        return this.billingService.addBalance(user.id, amount);
+        // If userId is provided, add to that user; otherwise add to admin's own
+        const targetUserId = body.userId || user.id;
+        return this.billingService.addBalance(targetUserId, amount, 'ADMIN_ADD', `Admin ${user.id} added balance`, undefined);
     }
 
     @Get('payments')
     @UseGuards(JwtAuthGuard)
     getPayments(@CurrentUser() user: any) {
         return this.billingService.getUserPayments(user.id);
+    }
+
+    @Get('balance/transactions')
+    @UseGuards(JwtAuthGuard)
+    getBalanceTransactions(@CurrentUser() user: any) {
+        return this.billingService.getBalanceTransactions(user.id);
     }
 
     // --- Razorpay ---

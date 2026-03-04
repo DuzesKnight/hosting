@@ -7,6 +7,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '@prisma/client';
+import { CreatePlanDto, UpdatePlanDto, SetRoleDto } from './dto/admin.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -27,12 +28,12 @@ export class AdminController {
     getUserDetails(@Param('id') id: string) { return this.adminService.getUserDetails(id); }
 
     @Patch('users/:id/role')
-    setRole(@Param('id') id: string, @Body('role') role: 'USER' | 'ADMIN') {
-        return this.adminService.setUserRole(id, role);
+    setRole(@Param('id') id: string, @Body() body: SetRoleDto, @CurrentUser() user: any) {
+        return this.adminService.setUserRole(id, body.role, user.id);
     }
 
     @Delete('users/:id')
-    deleteUser(@Param('id') id: string) { return this.adminService.deleteUser(id); }
+    deleteUser(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.deleteUser(id, user.id); }
 
     // --- Servers ---
     @Get('servers')
@@ -41,20 +42,20 @@ export class AdminController {
     }
 
     @Post('servers/:id/suspend')
-    suspend(@Param('id') id: string) { return this.adminService.suspendServer(id); }
+    suspend(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.suspendServer(id, user.id); }
 
     @Post('servers/:id/unsuspend')
-    unsuspend(@Param('id') id: string) { return this.adminService.unsuspendServer(id); }
+    unsuspend(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.unsuspendServer(id, user.id); }
 
     // --- Plans ---
     @Post('plans')
-    createPlan(@Body() body: any) { return this.adminService.createPlan(body); }
+    createPlan(@Body() body: CreatePlanDto, @CurrentUser() user: any) { return this.adminService.createPlan(body, user.id); }
 
     @Patch('plans/:id')
-    updatePlan(@Param('id') id: string, @Body() body: any) { return this.adminService.updatePlan(id, body); }
+    updatePlan(@Param('id') id: string, @Body() body: UpdatePlanDto, @CurrentUser() user: any) { return this.adminService.updatePlan(id, body, user.id); }
 
     @Delete('plans/:id')
-    deletePlan(@Param('id') id: string) { return this.adminService.deletePlan(id); }
+    deletePlan(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.deletePlan(id, user.id); }
 
     // --- UPI ---
     @Get('upi/pending')
@@ -66,7 +67,7 @@ export class AdminController {
     }
 
     @Post('upi/:id/reject')
-    rejectUpi(@Param('id') id: string) { return this.adminService.rejectUpi(id); }
+    rejectUpi(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.rejectUpi(id, user.id); }
 
     // --- Settings ---
     @Get('settings')

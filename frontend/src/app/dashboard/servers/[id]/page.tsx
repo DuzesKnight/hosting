@@ -87,7 +87,13 @@ export default function ServerDetailPage() {
     useEffect(() => {
         if (!server?.pteroUuid) return;
         pluginsApi.detect(server.pteroUuid)
-            .then((r) => setServerSoftware(r.data))
+            .then((r) => {
+                setServerSoftware(r.data);
+                // Auto-select Modrinth for mod-based servers (Fabric/Forge) since Spiget only has Bukkit plugins
+                if (r.data?.type === 'mod') {
+                    setPluginSource('modrinth');
+                }
+            })
             .catch(() => {});
     }, [server?.pteroUuid]);
 
@@ -258,7 +264,11 @@ export default function ServerDetailPage() {
         setPluginVersions([]);
         try {
             if (pluginSource === 'modrinth') {
-                const { data } = await pluginsApi.modrinthSearch(pluginSearch);
+                // Pass detected server software as loader filter for relevant results
+                const loaders = serverSoftware?.software && serverSoftware.software !== 'unknown'
+                    ? [serverSoftware.software]
+                    : undefined;
+                const { data } = await pluginsApi.modrinthSearch(pluginSearch, 20, 0, loaders);
                 setPluginResults(data?.hits || []);
             } else {
                 const { data } = await pluginsApi.spigetSearch(pluginSearch);
@@ -270,7 +280,11 @@ export default function ServerDetailPage() {
     const viewModrinthVersions = async (project: any) => {
         setSelectedProject(project);
         try {
-            const { data } = await pluginsApi.modrinthVersions(project.project_id);
+            // Pass detected server software as loader filter for compatible versions
+            const loaders = serverSoftware?.software && serverSoftware.software !== 'unknown'
+                ? [serverSoftware.software]
+                : undefined;
+            const { data } = await pluginsApi.modrinthVersions(project.project_id, loaders);
             setPluginVersions(data || []);
         } catch { toast.error('Failed to load versions'); }
     };
@@ -852,6 +866,14 @@ export default function ServerDetailPage() {
                             </button>
                         </div>
 
+                        {/* Warning for mod-based servers using Spiget */}
+                        {pluginSource === 'spiget' && serverSoftware?.type === 'mod' && (
+                            <div className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                                <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                                <span className="text-xs text-yellow-400">SpigotMC only has Bukkit/Spigot plugins. Your server uses <strong>{serverSoftware.software}</strong> — use Modrinth for compatible mods.</span>
+                            </div>
+                        )}
+
                         {/* Search */}
                         <div className="flex gap-2 mb-6">
                             <input value={pluginSearch} onChange={(e) => setPluginSearch(e.target.value)}
@@ -919,7 +941,7 @@ export default function ServerDetailPage() {
                                 pluginResults.map((p: any) => (
                                     <div key={p.id} className="flex items-center gap-4 p-4 rounded-lg bg-white/5 hover:bg-white/10 transition-all">
                                         {p.icon?.url ? (
-                                            <img src={`https://www.spigotmc.org/${p.icon.url}`} alt="" className="w-10 h-10 rounded-lg" />
+                                            <img src={`https://api.spiget.org/v2/${p.icon.url}`} alt="" className="w-10 h-10 rounded-lg" />
                                         ) : (
                                             <Puzzle className="w-10 h-10 text-orange-400 flex-shrink-0" />
                                         )}
@@ -928,11 +950,17 @@ export default function ServerDetailPage() {
                                             <p className="text-xs text-gray-500 truncate">{p.tag}</p>
                                         </div>
                                         <span className="text-xs text-gray-500 whitespace-nowrap">{(p.downloads || 0).toLocaleString()}</span>
+                                        {p.premium ? (
+                                            <span className="text-xs px-3 py-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 whitespace-nowrap">Premium</span>
+                                        ) : p.external ? (
+                                            <span className="text-xs px-3 py-1.5 rounded-lg bg-gray-500/10 text-gray-400 whitespace-nowrap cursor-help" title="External resource — must be downloaded manually">External</span>
+                                        ) : (
                                         <button onClick={() => installSpigetResource(p.id)}
                                             disabled={installingPlugin === String(p.id)}
                                             className="text-xs px-3 py-1.5 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors whitespace-nowrap disabled:opacity-50">
                                             {installingPlugin === String(p.id) ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Install'}
                                         </button>
+                                        )}
                                     </div>
                                 ))
                             )}

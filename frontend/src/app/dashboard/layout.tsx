@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LayoutDashboard, Server, CreditCard, Wallet, Gift, HeadphonesIcon,
-    User, Settings, Shield, Menu, X, LogOut, ChevronRight, Cloud
+    User, Settings, Shield, Menu, X, LogOut, ChevronRight, Cloud, Coins
 } from 'lucide-react';
 import { authApi } from '@/lib/api';
 
@@ -15,7 +15,7 @@ const navItems = [
     { href: '/dashboard/servers', icon: Server, label: 'Servers' },
     { href: '/dashboard/plans', icon: CreditCard, label: 'Plans' },
     { href: '/dashboard/billing', icon: Wallet, label: 'Billing' },
-    { href: '/dashboard/balance', icon: Wallet, label: 'Balance' },
+    { href: '/dashboard/balance', icon: Coins, label: 'Balance' },
     { href: '/dashboard/vps', icon: Cloud, label: 'VPS Hosting' },
     { href: '/dashboard/credits', icon: Gift, label: 'Earn Credits' },
     { href: '/dashboard/support', icon: HeadphonesIcon, label: 'Support' },

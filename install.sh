@@ -572,12 +572,12 @@ if $IS_NGINX_PROXIED; then
   # Validate: if APP_URL is https://, check SSL setup
   if [[ "$BASE_URL" == https://* ]]; then
     if [ -f nginx/nginx.conf ]; then
-      local nginx_has_443=false
+      NGINX_HAS_443=false
       if grep -q '^[[:space:]]*listen.*443' nginx/nginx.conf 2>/dev/null; then
-        nginx_has_443=true
+        NGINX_HAS_443=true
       fi
 
-      if ! $nginx_has_443; then
+      if ! $NGINX_HAS_443; then
         # No 443 listener — check if this might be Cloudflare Flexible mode
         info "${YELLOW}APP_URL uses HTTPS but nginx is only listening on port 80${NC}"
         detail "This is ${GREEN}${BOLD}fine${NC} if you're using ${CYAN}Cloudflare Proxy (orange cloud)${NC} with:"

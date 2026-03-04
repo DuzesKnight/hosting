@@ -39,6 +39,12 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-primary/60;
   }
+
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.4) transparent;
+  }
 }
 
 @layer components {
@@ -175,4 +181,27 @@
 
 .animate-float-delay-2 {
   animation: float 6s ease-in-out 2s infinite;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Accessibility: respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

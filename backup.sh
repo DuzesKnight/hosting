@@ -261,16 +261,19 @@ if $DO_FULL; then
     alpine:3.18 \
     tar czf /backup/redisdata.tar.gz -C /data . 2>/dev/null || warn "Could not export redisdata volume"
 
-  # Bundle everything together
+  # Copy DB dump and .env into temp dir so everything is in one archive
+  cp "$DB_BACKUP_FILE" "$TEMP_DIR/db_dump.sql.gz" 2>/dev/null || true
+  cp "$ENV_BACKUP_FILE" "$TEMP_DIR/env_backup" 2>/dev/null || true
+
+  # Also backup SSL certificates if they exist
+  if [ -d "$(pwd)/nginx/ssl" ] && [ "$(ls -A "$(pwd)/nginx/ssl" 2>/dev/null)" ]; then
+    tar czf "$TEMP_DIR/ssl_certs.tar.gz" -C "$(pwd)/nginx/ssl" . 2>/dev/null || warn "Could not backup SSL certs"
+  fi
+
+  # Bundle everything together in one compressed archive
   tar czf "$FULL_BACKUP_FILE" \
     -C "$TEMP_DIR" . \
-    --transform='s,^\./,volumes/,' \
     2>/dev/null
-
-  # Add DB dump and .env to the full backup
-  tar --append -f "${FULL_BACKUP_FILE%.gz}" \
-    "$DB_BACKUP_FILE" "$ENV_BACKUP_FILE" \
-    2>/dev/null || true
 
   rm -rf "$TEMP_DIR"
 

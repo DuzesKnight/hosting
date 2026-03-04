@@ -192,6 +192,21 @@ export class ServersService {
             if (credits <= 0) {
                 throw new BadRequestException('You need credits to create a free server. Earn credits by watching ads.');
             }
+
+            // Deduct 1 credit for free server creation
+            const deducted = await this.prisma.$transaction(async (tx) => {
+                const cred = await tx.credit.findUnique({ where: { userId } });
+                if (!cred || cred.amount < 1) return false;
+                await tx.credit.update({
+                    where: { userId },
+                    data: { amount: { decrement: 1 } },
+                });
+                return true;
+            });
+
+            if (!deducted) {
+                throw new BadRequestException('Failed to deduct credits. Please try again.');
+            }
         }
 
         // ---------- Create Pterodactyl account ----------
@@ -277,34 +292,84 @@ export class ServersService {
                         update: { amount: { increment: price } },
                         create: { userId, amount: price },
                     });
+                    // Record refund in balance transaction ledger
+                    await this.prisma.balanceTransaction.create({
+                        data: {
+                            userId,
+                            amount: price,
+                            type: 'REFUND',
+                            description: 'Server provisioning failed — auto-refund',
+                        },
+                    });
                     this.logger.warn(`Refunded ₹${price} to user ${userId} due to Pterodactyl provisioning failure`);
                 }
+            } else {
+                // Refund the 1 credit for free server
+                await this.prisma.credit.upsert({
+                    where: { userId },
+                    update: { amount: { increment: 1 } },
+                    create: { userId, amount: 1 },
+                });
+                this.logger.warn(`Refunded 1 credit to user ${userId} due to free server provisioning failure`);
             }
             throw new BadRequestException('Failed to create server in Pterodactyl. Your balance has been refunded.');
         }
 
-        // Save to DB
-        const server = await this.prisma.server.create({
-            data: {
-                userId,
-                planId: data.planId,
-                name: data.name,
-                pteroServerId: pteroServer.id,
-                pteroUuid: pteroServer.uuid,
-                pteroIdentifier: pteroServer.identifier,
-                status: ServerStatus.ACTIVE,
-                isFreeServer: plan.type === PlanType.FREE,
-                ram,
-                cpu,
-                disk,
-                backups: plan.backups,
-                ports: plan.ports,
-                databases: plan.databases,
-                expiresAt: plan.type === PlanType.FREE
-                    ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)  // Free: 7 days
-                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Paid: 30 days
-            },
-        });
+        // Save to DB — wrapped in try/catch to handle DB failure after Pterodactyl success
+        let server;
+        try {
+            server = await this.prisma.server.create({
+                data: {
+                    userId,
+                    planId: data.planId,
+                    name: data.name,
+                    pteroServerId: pteroServer.id,
+                    pteroUuid: pteroServer.uuid,
+                    pteroIdentifier: pteroServer.identifier,
+                    status: ServerStatus.ACTIVE,
+                    isFreeServer: plan.type === PlanType.FREE,
+                    ram,
+                    cpu,
+                    disk,
+                    backups: plan.backups,
+                    ports: plan.ports,
+                    databases: plan.databases,
+                    expiresAt: plan.type === PlanType.FREE
+                        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)  // Free: 7 days
+                        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Paid: 30 days
+                },
+            });
+        } catch (dbError: any) {
+            // DB failed after Pterodactyl succeeded — clean up orphaned Pterodactyl server
+            this.logger.error(`DB save failed after Pterodactyl server created (pteroId=${pteroServer.id}): ${dbError.message}`);
+            try {
+                await this.pterodactyl.deleteServer(pteroServer.id);
+                this.logger.warn(`Cleaned up orphaned Pterodactyl server ${pteroServer.id}`);
+            } catch (cleanupError: any) {
+                this.logger.error(`CRITICAL: Failed to clean up orphaned Pterodactyl server ${pteroServer.id}: ${cleanupError.message}`);
+            }
+            // Refund the user
+            if (plan.type !== PlanType.FREE) {
+                const pricePerGb = plan.pricePerGb || 50;
+                const ramGb = ram / 1024;
+                const cpuFactor = cpu / 100;
+                const diskGb = disk / 1024;
+                const refundPrice = plan.type === PlanType.CUSTOM
+                    ? Math.ceil(ramGb * pricePerGb + diskGb * (pricePerGb * 0.1) + cpuFactor * (pricePerGb * 0.5))
+                    : plan.pricePerMonth;
+                if (refundPrice > 0) {
+                    await this.prisma.balance.upsert({
+                        where: { userId },
+                        update: { amount: { increment: refundPrice } },
+                        create: { userId, amount: refundPrice },
+                    });
+                    await this.prisma.balanceTransaction.create({
+                        data: { userId, amount: refundPrice, type: 'REFUND', description: 'Server DB save failed — auto-refund' },
+                    });
+                }
+            }
+            throw new BadRequestException('Server creation failed. Your balance has been refunded.');
+        }
 
         this.logger.log(`Server ${server.id} provisioned for user ${userId} (${ram}MB RAM / ${cpu}% CPU / ${disk}MB Disk)`);
         return server;

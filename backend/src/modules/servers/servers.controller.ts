@@ -1,9 +1,11 @@
 import {
-    Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards,
+    Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, BadRequestException,
 } from '@nestjs/common';
 import { ServersService } from './servers.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CreateServerDto } from './dto/create-server.dto';
+import { PowerActionDto } from './dto/power-action.dto';
 
 @Controller('servers')
 @UseGuards(JwtAuthGuard)
@@ -21,7 +23,7 @@ export class ServersController {
     }
 
     @Post()
-    createServer(@CurrentUser() user: any, @Body() body: any) {
+    createServer(@CurrentUser() user: any, @Body() body: CreateServerDto) {
         return this.serversService.provisionServer(user.id, body);
     }
 
@@ -33,8 +35,8 @@ export class ServersController {
     }
 
     @Post(':id/power')
-    powerAction(@CurrentUser() user: any, @Param('id') id: string, @Body('signal') signal: any) {
-        return this.serversService.powerAction(user.id, id, signal);
+    powerAction(@CurrentUser() user: any, @Param('id') id: string, @Body() body: PowerActionDto) {
+        return this.serversService.powerAction(user.id, id, body.signal);
     }
 
     @Get(':id/console')
@@ -44,6 +46,7 @@ export class ServersController {
 
     @Post(':id/command')
     sendCommand(@CurrentUser() user: any, @Param('id') id: string, @Body('command') command: string) {
+        if (!command || typeof command !== 'string') throw new BadRequestException('Command is required');
         return this.serversService.sendConsoleCommand(user.id, id, command);
     }
 

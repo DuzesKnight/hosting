@@ -104,6 +104,7 @@ model User {
   auditLogs         AuditLog[]
   linkedAccounts    LinkedAccount[]
   loginSessions     LoginSession[]
+  balanceTransactions BalanceTransaction[]
 
   @@index([email])
   @@index([providerId])
@@ -173,12 +174,14 @@ model Server {
   updatedAt       DateTime     @updatedAt
 
   user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan            Plan?        @relation(fields: [planId], references: [id])
+  plan            Plan?        @relation(fields: [planId], references: [id], onDelete: SetNull)
   payments        Payment[]
 
   @@index([userId])
   @@index([pteroServerId])
   @@index([status])
+  @@index([expiresAt])
+  @@index([updatedAt])
 }
 
 model Plan {
@@ -214,6 +217,9 @@ model Plan {
   updatedAt       DateTime       @updatedAt
 
   servers         Server[]
+
+  @@index([isActive])
+  @@index([type])
 }
 
 model Payment {
@@ -231,10 +237,12 @@ model Payment {
   updatedAt       DateTime       @updatedAt
 
   user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  server          Server?        @relation(fields: [serverId], references: [id])
+  server          Server?        @relation(fields: [serverId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([gatewayOrderId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Balance {
@@ -286,6 +294,7 @@ model UpiPayment {
 
   @@index([userId])
   @@index([utr])
+  @@index([status])
 }
 
 model VpsPlan {
@@ -330,7 +339,7 @@ model Vps {
   updatedAt   DateTime  @updatedAt
 
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vpsPlan     VpsPlan?  @relation(fields: [vpsPlanId], references: [id])
+  vpsPlan     VpsPlan?  @relation(fields: [vpsPlanId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([vpsPlanId])
@@ -352,9 +361,25 @@ model AuditLog {
   ipAddress String?
   createdAt DateTime @default(now())
 
-  user      User?    @relation(fields: [userId], references: [id])
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([action])
+  @@index([createdAt])
+}
+
+model BalanceTransaction {
+  id          String   @id @default(uuid())
+  userId      String
+  amount      Float              // positive = credit, negative = debit
+  type        String             // TOP_UP, SERVER_CREATION, RENEWAL, REFUND, ADMIN_ADD
+  description String?
+  relatedId   String?            // serverId, paymentId, etc.
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
   @@index([createdAt])
 }

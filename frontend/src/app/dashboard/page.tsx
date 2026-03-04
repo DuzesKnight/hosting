@@ -86,7 +86,7 @@ export default function DashboardPage() {
                                     }`} />
                                 <div className="flex-1 min-w-0">
                                     <p className="font-medium truncate">{server.name}</p>
-                                    <p className="text-xs text-gray-500">{server.ram}MB RAM · {server.cpu}% CPU · {server.disk}MB Disk</p>
+                                    <p className="text-xs text-gray-500">{server.ram >= 1024 ? `${(server.ram / 1024).toFixed(1)} GB` : `${server.ram} MB`} RAM · {server.cpu}% CPU · {server.disk >= 1024 ? `${(server.disk / 1024).toFixed(1)} GB` : `${server.disk} MB`} Disk</p>
                                 </div>
                                 <span className={
                                     server.status === 'ACTIVE' ? 'status-active' :

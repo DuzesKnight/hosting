@@ -22,10 +22,12 @@ export class AdminService {
 
     // ---------- Dashboard Stats ----------
     async getDashboardStats() {
-        const [userCount, serverCount, activeServers, totalRevenue, recentPayments] = await Promise.all([
+        const [userCount, serverCount, activeServers, suspendedServers, expiredServers, totalRevenue, recentPayments, pendingUpi, totalBalance] = await Promise.all([
             this.prisma.user.count(),
-            this.prisma.server.count(),
+            this.prisma.server.count({ where: { status: { not: 'DELETED' } } }),
             this.prisma.server.count({ where: { status: 'ACTIVE' } }),
+            this.prisma.server.count({ where: { status: 'SUSPENDED' } }),
+            this.prisma.server.count({ where: { status: { in: ['EXPIRED', 'DELETED'] } } }),
             this.prisma.payment.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount: true } }),
             this.prisma.payment.findMany({
                 where: { status: 'COMPLETED' },
@@ -33,14 +35,20 @@ export class AdminService {
                 take: 10,
                 include: { user: true },
             }),
+            this.prisma.upiPayment.count({ where: { status: 'PENDING' } }),
+            this.prisma.balance.aggregate({ _sum: { amount: true } }),
         ]);
 
         return {
             users: userCount,
             servers: serverCount,
             activeServers,
+            suspendedServers,
+            expiredServers,
             revenue: totalRevenue._sum.amount || 0,
             recentPayments,
+            pendingUpi,
+            totalBalanceAcrossUsers: totalBalance._sum.amount || 0,
         };
     }
 
@@ -49,12 +57,30 @@ export class AdminService {
         return this.usersService.getAllUsers(page, limit);
     }
 
-    async setUserRole(userId: string, role: 'USER' | 'ADMIN') {
-        return this.usersService.setRole(userId, role);
+    async setUserRole(userId: string, role: 'USER' | 'ADMIN', adminId?: string) {
+        const result = await this.usersService.setRole(userId, role);
+        if (adminId) await this.createAuditLog(adminId, 'SET_USER_ROLE', { targetUserId: userId, newRole: role });
+        return result;
     }
 
-    async deleteUser(userId: string) {
-        return this.usersService.deleteUser(userId);
+    async deleteUser(userId: string, adminId?: string) {
+        // Clean up Pterodactyl account before deleting
+        const user = await this.prisma.user.findUnique({
+            where: { id: userId },
+            include: { pterodactylAccount: true, servers: true },
+        });
+        if (user?.pterodactylAccount) {
+            // Delete all user's servers from Pterodactyl first
+            for (const server of user.servers) {
+                if (server.pteroServerId) {
+                    try { await this.pterodactyl.deleteServer(server.pteroServerId); } catch { /* best effort */ }
+                }
+            }
+            try { await this.pterodactyl.deleteUser(user.pterodactylAccount.pteroUserId); } catch { /* best effort */ }
+        }
+        const result = await this.usersService.deleteUser(userId);
+        if (adminId) await this.createAuditLog(adminId, 'DELETE_USER', { deletedUserId: userId, email: user?.email });
+        return result;
     }
 
     async getUserDetails(userId: string) {
@@ -86,37 +112,64 @@ export class AdminService {
         return { servers, total, page, totalPages: Math.ceil(total / limit) };
     }
 
-    async suspendServer(serverId: string) {
+    async suspendServer(serverId: string, adminId?: string) {
         const server = await this.prisma.server.findUnique({ where: { id: serverId } });
         if (server?.pteroServerId) {
             await this.pterodactyl.suspendServer(server.pteroServerId);
         }
-        return this.prisma.server.update({
+        const result = await this.prisma.server.update({
             where: { id: serverId },
             data: { status: ServerStatus.SUSPENDED },
         });
+        if (adminId) await this.createAuditLog(adminId, 'SUSPEND_SERVER', { serverId, serverName: server?.name });
+        return result;
     }
 
-    async unsuspendServer(serverId: string) {
+    async unsuspendServer(serverId: string, adminId?: string) {
         const server = await this.prisma.server.findUnique({ where: { id: serverId } });
         if (server?.pteroServerId) {
             await this.pterodactyl.unsuspendServer(server.pteroServerId);
         }
-        return this.prisma.server.update({
+
+        // Extend expiry by 30 days from now to prevent immediate re-suspension by cron
+        const newExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const result = await this.prisma.server.update({
             where: { id: serverId },
-            data: { status: ServerStatus.ACTIVE },
+            data: { status: ServerStatus.ACTIVE, expiresAt: newExpiry, renewalNotified: false },
         });
+        if (adminId) await this.createAuditLog(adminId, 'UNSUSPEND_SERVER', { serverId, serverName: server?.name, newExpiry: newExpiry.toISOString() });
+        return result;
     }
 
     // ---------- Plans ----------
-    async createPlan(data: any) { return this.plansService.createPlan(data); }
-    async updatePlan(id: string, data: any) { return this.plansService.updatePlan(id, data); }
-    async deletePlan(id: string) { return this.plansService.deletePlan(id); }
+    async createPlan(data: any, adminId?: string) {
+        const result = await this.plansService.createPlan(data);
+        if (adminId) await this.createAuditLog(adminId, 'CREATE_PLAN', { planId: result.id, planName: data.name });
+        return result;
+    }
+    async updatePlan(id: string, data: any, adminId?: string) {
+        const result = await this.plansService.updatePlan(id, data);
+        if (adminId) await this.createAuditLog(adminId, 'UPDATE_PLAN', { planId: id, changes: data });
+        return result;
+    }
+    async deletePlan(id: string, adminId?: string) {
+        const result = await this.plansService.deletePlan(id);
+        if (adminId) await this.createAuditLog(adminId, 'DELETE_PLAN', { planId: id });
+        return result;
+    }
 
     // ---------- UPI Approvals ----------
     async getPendingUpi() { return this.billingService.getPendingUpiPayments(); }
-    async approveUpi(id: string, adminId: string) { return this.billingService.approveUpiPayment(id, adminId); }
-    async rejectUpi(id: string) { return this.billingService.rejectUpiPayment(id); }
+    async approveUpi(id: string, adminId: string) {
+        const result = await this.billingService.approveUpiPayment(id, adminId);
+        await this.createAuditLog(adminId, 'APPROVE_UPI', { upiPaymentId: id });
+        return result;
+    }
+    async rejectUpi(id: string, adminId?: string) {
+        const result = await this.billingService.rejectUpiPayment(id);
+        if (adminId) await this.createAuditLog(adminId, 'REJECT_UPI', { upiPaymentId: id });
+        return result;
+    }
 
     // ---------- Settings ----------
     async getSettings() {

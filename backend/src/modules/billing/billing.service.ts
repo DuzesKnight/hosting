@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ServersService } from '../servers/servers.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
+import { DiscordService } from '../discord/discord.service';
 import { PaymentGateway, PaymentStatus, ServerStatus, UpiStatus } from '@prisma/client';
 import axios from 'axios';
 import * as crypto from 'crypto';
@@ -17,6 +18,7 @@ export class BillingService {
         private config: ConfigService,
         private serversService: ServersService,
         private pterodactyl: PterodactylService,
+        private discord: DiscordService,
     ) { }
 
     // ========== RAZORPAY ==========
@@ -209,9 +211,17 @@ export class BillingService {
             throw new BadRequestException('UPI payments are not enabled');
         }
 
-        return this.prisma.upiPayment.create({
+        const upiPayment = await this.prisma.upiPayment.create({
             data: { userId, utr, amount, serverId, planId },
         });
+
+        // Notify Discord about new UPI submission
+        try {
+            const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } });
+            await this.discord.logUtrRequest(user?.name || user?.email || userId, utr, amount);
+        } catch {}
+
+        return upiPayment;
     }
 
     async approveUpiPayment(upiPaymentId: string, approvedBy: string) {
@@ -257,15 +267,22 @@ export class BillingService {
         return balance?.amount || 0;
     }
 
-    async addBalance(userId: string, amount: number) {
-        return this.prisma.balance.upsert({
+    async addBalance(userId: string, amount: number, type = 'TOP_UP', description?: string, relatedId?: string) {
+        const result = await this.prisma.balance.upsert({
             where: { userId },
             update: { amount: { increment: amount } },
             create: { userId, amount },
         });
+
+        // Record balance transaction for audit trail
+        await this.prisma.balanceTransaction.create({
+            data: { userId, amount, type, description, relatedId },
+        });
+
+        return result;
     }
 
-    async deductBalance(userId: string, amount: number): Promise<boolean> {
+    async deductBalance(userId: string, amount: number, type = 'DEDUCTION', description?: string, relatedId?: string): Promise<boolean> {
         // Use interactive transaction to prevent race conditions (negative balance)
         return this.prisma.$transaction(async (tx) => {
             const balance = await tx.balance.findUnique({ where: { userId } });
@@ -275,12 +292,18 @@ export class BillingService {
                 where: { userId },
                 data: { amount: { decrement: amount } },
             });
+
+            // Record balance transaction for audit trail
+            await tx.balanceTransaction.create({
+                data: { userId, amount: -amount, type, description, relatedId },
+            });
+
             return true;
         });
     }
 
     async payWithBalance(userId: string, amount: number, serverId?: string): Promise<any> {
-        const deducted = await this.deductBalance(userId, amount);
+        const deducted = await this.deductBalance(userId, amount, serverId ? 'RENEWAL' : 'DEDUCTION', serverId ? `Renewal for server ${serverId}` : 'Balance payment', serverId);
         if (!deducted) throw new BadRequestException('Insufficient balance');
 
         const payment = await this.prisma.payment.create({
@@ -300,6 +323,9 @@ export class BillingService {
     // ========== PAYMENT SUCCESS HANDLER ==========
 
     private async handlePaymentSuccess(payment: any) {
+        const user = await this.prisma.user.findUnique({ where: { id: payment.userId } });
+        const userName = user?.name || 'Unknown';
+
         if (payment.serverId) {
             // Renewal: unsuspend and extend expiry
             const server = await this.prisma.server.findUnique({ where: { id: payment.serverId } });
@@ -321,13 +347,42 @@ export class BillingService {
                     data: { status: ServerStatus.ACTIVE, expiresAt: newExpiry, renewalNotified: false },
                 });
                 this.logger.log(`Server ${server.id} renewed until ${newExpiry.toISOString()}`);
+
+                // Discord log for renewal
+                await this.discord.logServerRenewal(userName, server.name, newExpiry);
             }
         } else {
-            // Balance top-up
-            await this.addBalance(payment.userId, payment.amount);
+            // Balance top-up — only add balance if payment was NOT from the BALANCE gateway 
+            // (balance gateway already deducted; other gateways add funds)
+            if (payment.gateway !== PaymentGateway.BALANCE) {
+                await this.addBalance(payment.userId, payment.amount, 'TOP_UP', `${payment.gateway} payment`, payment.id);
+            }
             this.logger.log(`Balance added: ₹${payment.amount} for user ${payment.userId}`);
         }
+
+        // Discord log for payment
+        await this.discord.logPayment(userName, payment.amount, payment.gateway);
         this.logger.log(`Payment ${payment.id} completed: ₹${payment.amount} via ${payment.gateway}`);
+    }
+
+    // ========== SERVER RENEWAL COST CALCULATOR ==========
+
+    private async calculateServerRenewalCost(server: any): Promise<number> {
+        if (server.isFreeServer) return 0;
+        if (!server.planId) return 0;
+
+        const plan = await this.prisma.plan.findUnique({ where: { id: server.planId } });
+        if (!plan) return 0;
+
+        if (plan.type === 'CUSTOM') {
+            const pricePerGb = plan.pricePerGb || 50;
+            const ramGb = server.ram / 1024;
+            const cpuFactor = server.cpu / 100;
+            const diskGb = server.disk / 1024;
+            return Math.ceil(ramGb * pricePerGb + diskGb * (pricePerGb * 0.1) + cpuFactor * (pricePerGb * 0.5));
+        }
+
+        return plan.pricePerMonth || 0;
     }
 
     // ========== RENEWAL CRON ==========
@@ -336,23 +391,99 @@ export class BillingService {
     async checkRenewals() {
         const now = new Date();
         const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
-        // Notify servers expiring in 7 days
-        await this.prisma.server.updateMany({
+        // ── Step 1: Send renewal reminders (7 days before expiry) ──
+        const serversToNotify = await this.prisma.server.findMany({
             where: {
                 status: ServerStatus.ACTIVE,
                 renewalNotified: false,
-                expiresAt: { lte: sevenDaysFromNow },
+                isFreeServer: false,
+                expiresAt: { lte: sevenDaysFromNow, gt: now },
             },
-            data: { renewalNotified: true },
+            include: { user: true },
         });
 
-        // Suspend expired servers
+        for (const server of serversToNotify) {
+            const daysLeft = Math.ceil((server.expiresAt!.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+            const renewalCost = await this.calculateServerRenewalCost(server);
+
+            // Send Discord notification
+            await this.discord.sendRenewalReminder(
+                server.user.name,
+                server.name,
+                daysLeft,
+                renewalCost,
+            );
+
+            // Log the notification
+            this.logger.log(`Renewal reminder sent for server ${server.id} (${server.name}) — ${daysLeft} days left`);
+
+            await this.prisma.server.update({
+                where: { id: server.id },
+                data: { renewalNotified: true },
+            });
+        }
+
+        // ── Step 2: Auto-renew from balance (3 days before or at expiry) ──
+        const serversToAutoRenew = await this.prisma.server.findMany({
+            where: {
+                status: ServerStatus.ACTIVE,
+                isFreeServer: false,
+                expiresAt: { lte: threeDaysFromNow, gt: now },
+            },
+            include: { user: { include: { balance: true } } },
+        });
+
+        for (const server of serversToAutoRenew) {
+            const renewalCost = await this.calculateServerRenewalCost(server);
+            if (renewalCost <= 0) continue;
+
+            const userBalance = server.user.balance?.amount || 0;
+            if (userBalance >= renewalCost) {
+                // Auto-renew from balance
+                const deducted = await this.deductBalance(
+                    server.userId,
+                    renewalCost,
+                    'RENEWAL',
+                    `Auto-renewal for server "${server.name}"`,
+                    server.id,
+                );
+
+                if (deducted) {
+                    const currentExpiry = server.expiresAt?.getTime() || Date.now();
+                    const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + 30 * 24 * 60 * 60 * 1000);
+
+                    await this.prisma.server.update({
+                        where: { id: server.id },
+                        data: { expiresAt: newExpiry, renewalNotified: false },
+                    });
+
+                    // Record payment
+                    await this.prisma.payment.create({
+                        data: {
+                            userId: server.userId,
+                            serverId: server.id,
+                            gateway: PaymentGateway.BALANCE,
+                            amount: renewalCost,
+                            status: PaymentStatus.COMPLETED,
+                            metadata: { type: 'auto_renewal', autoRenew: true },
+                        },
+                    });
+
+                    await this.discord.logServerRenewal(server.user.name, server.name, newExpiry);
+                    this.logger.log(`Auto-renewed server ${server.id} (${server.name}) — ₹${renewalCost} deducted, new expiry: ${newExpiry.toISOString()}`);
+                }
+            }
+        }
+
+        // ── Step 3: Suspend expired servers (that weren't auto-renewed) ──
         const expiredServers = await this.prisma.server.findMany({
             where: {
                 status: ServerStatus.ACTIVE,
                 expiresAt: { lte: now },
             },
+            include: { user: true },
         });
 
         for (const server of expiredServers) {
@@ -368,10 +499,13 @@ export class BillingService {
                 where: { id: server.id },
                 data: { status: ServerStatus.SUSPENDED },
             });
+
+            // Notify user of suspension
+            await this.discord.logServerSuspend(server.user.name, server.name, 'Expired — insufficient balance for auto-renewal');
             this.logger.warn(`Server ${server.id} suspended (expired)`);
         }
 
-        // Delete servers suspended for 48+ hours (use updatedAt = when status changed to SUSPENDED)
+        // ── Step 4: Delete servers suspended for 48+ hours ──
         const deleteThreshold = new Date(now.getTime() - 48 * 60 * 60 * 1000);
         const toDelete = await this.prisma.server.findMany({
             where: {
@@ -379,10 +513,12 @@ export class BillingService {
                 isFreeServer: false, // Free servers handled by CreditsService
                 updatedAt: { lte: deleteThreshold },
             },
+            include: { user: true },
         });
 
         for (const server of toDelete) {
             await this.serversService.deleteServer(server.id);
+            await this.discord.logServerDelete(server.user.name, server.name, 'Suspended 48+ hours without renewal');
             this.logger.warn(`Server ${server.id} deleted (expired 48h+)`);
         }
     }
@@ -397,14 +533,36 @@ export class BillingService {
     }
 
     // ---------- Gateway Status ----------
-    getEnabledGateways() {
+    async getEnabledGateways() {
+        // Check DB settings first (admin panel), fall back to env vars
+        const dbSettings = await this.prisma.adminSetting.findMany({
+            where: { key: { in: ['RAZORPAY_ENABLED', 'CASHFREE_ENABLED', 'UPI_ENABLED', 'UPI_ID'] } },
+        });
+        const db: Record<string, string> = {};
+        for (const s of dbSettings) db[s.key] = s.value;
+
         return {
-            razorpay: this.config.get('RAZORPAY_ENABLED') === 'true',
-            cashfree: this.config.get('CASHFREE_ENABLED') === 'true',
-            upi: this.config.get('UPI_ENABLED') === 'true',
-            upiId: this.config.get('UPI_ID', ''),
+            razorpay: (db['RAZORPAY_ENABLED'] || this.config.get('RAZORPAY_ENABLED', 'false')) === 'true',
+            cashfree: (db['CASHFREE_ENABLED'] || this.config.get('CASHFREE_ENABLED', 'false')) === 'true',
+            upi: (db['UPI_ENABLED'] || this.config.get('UPI_ENABLED', 'false')) === 'true',
+            upiId: db['UPI_ID'] || this.config.get('UPI_ID', ''),
             balance: true,
         };
+    }
+
+    // ---------- Balance Transactions (ledger/audit) ----------
+    async getBalanceTransactions(userId: string, page = 1, limit = 20) {
+        const skip = (page - 1) * limit;
+        const [transactions, total] = await Promise.all([
+            this.prisma.balanceTransaction.findMany({
+                where: { userId },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limit,
+            }),
+            this.prisma.balanceTransaction.count({ where: { userId } }),
+        ]);
+        return { transactions, total, page, totalPages: Math.ceil(total / limit) };
     }
 
     // ========== WEBHOOKS ==========

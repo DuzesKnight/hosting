@@ -42,10 +42,19 @@ export class PluginsController {
 
     // --- Modrinth (search is public, no ownership needed) ---
     @Get('modrinth/search')
-    searchModrinth(@Query('query') query: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
+    searchModrinth(
+        @Query('query') query: string,
+        @Query('limit') limit?: string,
+        @Query('offset') offset?: string,
+        @Query('project_type') projectType?: 'plugin' | 'mod',
+        @Query('loaders') loaders?: string,
+    ) {
+        const parsedLoaders = loaders ? JSON.parse(loaders) as string[] : undefined;
         return this.pluginsService.searchModrinth(query, {
             limit: parseInt(limit || '20'),
             offset: parseInt(offset || '0'),
+            projectType: projectType || 'mod',
+            loaders: parsedLoaders,
         });
     }
 
