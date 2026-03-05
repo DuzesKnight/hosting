@@ -138,4 +138,53 @@ export class EmailService {
             // Don't throw — email failure shouldn't block user operations
         }
     }
+
+    async sendRenewalReminderEmail(to: string, name: string, serverName: string, daysLeft: number, renewalCost: number): Promise<void> {
+        const appUrl = this.config.get('APP_URL', 'http://localhost:3000');
+        const appName = this.config.get('APP_NAME', 'GameHost');
+
+        if (!this.smtpConfigured || !this.transporter) {
+            this.logger.warn(`[DEV] Renewal reminder for ${to}: ${serverName} expires in ${daysLeft} days`);
+            return;
+        }
+
+        const fromAddr = this.config.get('SMTP_FROM') || this.config.get('SMTP_USER') || 'noreply@gamehost.com';
+
+        try {
+            await this.transporter.sendMail({
+                from: `"${appName}" <${fromAddr}>`,
+                to,
+                subject: `⚠️ Server "${serverName}" expires in ${daysLeft} days`,
+                html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0a0e17;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;background:linear-gradient(135deg,#111827 0%,#1a1f2e 100%);border-radius:16px;border:1px solid rgba(255,255,255,0.08);overflow:hidden;">
+    <div style="padding:32px 40px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.06);">
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#00d4ff;">⚡ ${appName}</h1>
+    </div>
+    <div style="padding:40px;">
+      <h2 style="color:#ffffff;font-size:20px;margin:0 0 8px;">Renewal Reminder</h2>
+      <p style="color:#9ca3af;font-size:15px;line-height:1.6;margin:0 0 16px;">
+        Hey ${name}, your server <strong style="color:#fff;">${serverName}</strong> expires in <strong style="color:#ff6b6b;">${daysLeft} day${daysLeft !== 1 ? 's' : ''}</strong>.
+      </p>
+      <p style="color:#9ca3af;font-size:15px;line-height:1.6;margin:0 0 28px;">
+        Renewal cost: <strong style="color:#00d4ff;">₹${renewalCost}</strong>. Ensure you have sufficient balance to avoid suspension.
+      </p>
+      <div style="text-align:center;">
+        <a href="${appUrl}/dashboard/servers" style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#00d4ff,#7c3aed);color:#fff;text-decoration:none;border-radius:12px;font-weight:600;font-size:15px;">
+          Renew Now
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`,
+            });
+            this.logger.log(`Renewal reminder email sent to ${to} for server ${serverName}`);
+        } catch (error) {
+            this.logger.error(`Failed to send renewal reminder to ${to}: ${error.message}`);
+        }
+    }
 }

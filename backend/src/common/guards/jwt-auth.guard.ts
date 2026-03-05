@@ -24,7 +24,7 @@ export class JwtAuthGuard implements CanActivate {
             const payload: any = jwt.verify(token, secret);
             const user = await this.prisma.user.findUnique({
                 where: { id: payload.sub },
-                include: { balance: true, credits: true },
+                include: { balance: true, credits: true, linkedAccounts: true },
             });
 
             if (!user) {

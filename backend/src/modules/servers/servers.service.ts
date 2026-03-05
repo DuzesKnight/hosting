@@ -3,6 +3,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
 import { PterodactylClientService } from '../pterodactyl/pterodactyl-client.service';
 import { AuthService } from '../auth/auth.service';
+import { DiscordService } from '../discord/discord.service';
+import { CloudflareService } from '../cloudflare/cloudflare.service';
 import { ServerStatus, PlanType } from '@prisma/client';
 
 @Injectable()
@@ -14,6 +16,8 @@ export class ServersService {
         private pterodactyl: PterodactylService,
         private pterodactylClient: PterodactylClientService,
         private authService: AuthService,
+        private discord: DiscordService,
+        private cloudflare: CloudflareService,
     ) { }
 
     // ---------- Verify ownership by pterodactyl UUID ----------
@@ -182,12 +186,30 @@ export class ServersService {
                     },
                 });
 
+                // Record balance transaction for audit trail
+                await this.prisma.balanceTransaction.create({
+                    data: {
+                        userId,
+                        amount: -price,
+                        type: 'SERVER_CREATION',
+                        description: `Server creation: "${data.name}" (${plan.name})`,
+                    },
+                });
+
                 this.logger.log(`Deducted ₹${price} from user ${userId} for server creation`);
             }
         }
 
-        // Free plan: no upfront cost — credits are only consumed for renewal
-        // (see CreditsService.checkFreeServerCredits cron job)
+        // Free plan: absolutely free to create — credits are only consumed for renewal
+        if (plan.type === PlanType.FREE) {
+            // Enforce one free server per user
+            const existingFreeServers = await this.prisma.server.count({
+                where: { userId, isFreeServer: true, status: { not: ServerStatus.DELETED } },
+            });
+            if (existingFreeServers > 0) {
+                throw new BadRequestException('You can only have one free server. Upgrade to a paid plan for more servers.');
+            }
+        }
 
         // ---------- Create Pterodactyl account ----------
         await this.authService.ensurePterodactylAccount(user);
@@ -283,16 +305,10 @@ export class ServersService {
                     });
                     this.logger.warn(`Refunded ₹${price} to user ${userId} due to Pterodactyl provisioning failure`);
                 }
-            } else {
-                // Refund the 1 credit for free server
-                await this.prisma.credit.upsert({
-                    where: { userId },
-                    update: { amount: { increment: 1 } },
-                    create: { userId, amount: 1 },
-                });
-                this.logger.warn(`Refunded 1 credit to user ${userId} due to free server provisioning failure`);
             }
-            throw new BadRequestException('Failed to create server in Pterodactyl. Your balance has been refunded.');
+            throw new BadRequestException(plan.type !== PlanType.FREE
+                ? 'Failed to create server in Pterodactyl. Your balance has been refunded.'
+                : 'Failed to create server in Pterodactyl. Please try again.');
         }
 
         // Save to DB — wrapped in try/catch to handle DB failure after Pterodactyl success
@@ -314,9 +330,7 @@ export class ServersService {
                     backups: plan.backups,
                     ports: plan.ports,
                     databases: plan.databases,
-                    expiresAt: plan.type === PlanType.FREE
-                        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)  // Free: 7 days
-                        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Paid: 30 days
+                    expiresAt: new Date(Date.now() + (plan.renewalPeriodDays || (plan.type === PlanType.FREE ? 7 : 30)) * 24 * 60 * 60 * 1000),
                 },
             });
         } catch (dbError: any) {
@@ -352,6 +366,30 @@ export class ServersService {
         }
 
         this.logger.log(`Server ${server.id} provisioned for user ${userId} (${ram}MB RAM / ${cpu}% CPU / ${disk}MB Disk)`);
+
+        // Discord log for new server
+        try {
+            const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } });
+            await this.discord.logServerCreation(u?.name || u?.email || userId, data.name);
+        } catch { /* best effort */ }
+
+        // Auto-create Cloudflare DNS subdomain (if enabled)
+        try {
+            const alloc = pteroServer.relationships?.allocations?.data?.[0]?.attributes;
+            if (alloc?.ip) {
+                const subdomain = await this.cloudflare.createServerSubdomain(
+                    data.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 32),
+                    alloc.ip,
+                    alloc.port,
+                );
+                if (subdomain) {
+                    this.logger.log(`Created DNS subdomain for server ${server.id}`);
+                }
+            }
+        } catch (e: any) {
+            this.logger.warn(`Cloudflare DNS creation failed (non-critical): ${e.message}`);
+        }
+
         return server;
     }
 
@@ -464,6 +502,14 @@ export class ServersService {
             await this.pterodactyl.deleteServer(server.pteroServerId);
         }
 
+        // Clean up Cloudflare DNS records
+        try {
+            const subdomain = server.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 32);
+            await this.cloudflare.deleteServerSubdomain(subdomain);
+        } catch (e: any) {
+            this.logger.warn(`Cloudflare DNS cleanup failed for server ${serverId}: ${e.message}`);
+        }
+
         return this.prisma.server.update({
             where: { id: serverId },
             data: { status: ServerStatus.DELETED },
@@ -511,5 +557,147 @@ export class ServersService {
         const server = await this.prisma.server.findFirst({ where: { id: serverId, userId } });
         if (!server?.pteroUuid) throw new NotFoundException('Server not found');
         return this.pterodactylClient.reinstall(server.pteroUuid);
+    }
+
+    // ---------- Server Renewal Cost ----------
+    async getServerRenewalCost(userId: string, serverId: string): Promise<{ price: number; renewalDays: number; expiresAt: Date | null; serverName: string; isFreeServer: boolean }> {
+        const server = await this.prisma.server.findFirst({
+            where: { id: serverId, userId, status: { not: ServerStatus.DELETED } },
+            include: { plan: true },
+        });
+        if (!server) throw new NotFoundException('Server not found');
+
+        const renewalDays = server.plan?.renewalPeriodDays || (server.isFreeServer ? 7 : 30);
+
+        if (server.isFreeServer) {
+            return { price: 0, renewalDays, expiresAt: server.expiresAt, serverName: server.name, isFreeServer: true };
+        }
+
+        if (!server.plan) {
+            return { price: 0, renewalDays, expiresAt: server.expiresAt, serverName: server.name, isFreeServer: false };
+        }
+
+        // Use explicit renewalCost if set on the plan
+        if (server.plan.renewalCost > 0) {
+            return { price: server.plan.renewalCost, renewalDays, expiresAt: server.expiresAt, serverName: server.name, isFreeServer: false };
+        }
+
+        let price: number;
+        if (server.plan.type === PlanType.CUSTOM) {
+            const pricePerGb = server.plan.pricePerGb || 50;
+            const ramGb = server.ram / 1024;
+            const cpuFactor = server.cpu / 100;
+            const diskGb = server.disk / 1024;
+            price = Math.ceil(ramGb * pricePerGb + diskGb * (pricePerGb * 0.1) + cpuFactor * (pricePerGb * 0.5));
+        } else {
+            price = server.plan.pricePerMonth || 0;
+        }
+
+        return { price, renewalDays, expiresAt: server.expiresAt, serverName: server.name, isFreeServer: false };
+    }
+
+    // ---------- Manual Server Renewal ----------
+    async renewServer(userId: string, serverId: string): Promise<any> {
+        const server = await this.prisma.server.findFirst({
+            where: { id: serverId, userId, status: { not: ServerStatus.DELETED } },
+            include: { plan: true },
+        });
+        if (!server) throw new NotFoundException('Server not found');
+
+        const renewalDays = server.plan?.renewalPeriodDays || (server.isFreeServer ? 7 : 30);
+
+        // Free servers renewal via credits
+        if (server.isFreeServer) {
+            const credit = await this.prisma.credit.findUnique({ where: { userId } });
+            if (!credit || credit.amount < 1) {
+                throw new BadRequestException('You need at least 1 credit to renew a free server. Earn credits by watching ads.');
+            }
+            await this.prisma.credit.update({
+                where: { userId },
+                data: { amount: { decrement: 1 } },
+            });
+
+            const currentExpiry = server.expiresAt?.getTime() || Date.now();
+            const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + renewalDays * 24 * 60 * 60 * 1000);
+
+            // Unsuspend if suspended
+            if (server.status === ServerStatus.SUSPENDED && server.pteroServerId) {
+                try {
+                    await this.pterodactyl.unsuspendServer(server.pteroServerId);
+                } catch (e: any) {
+                    this.logger.error(`Failed to unsuspend server ${server.pteroServerId}: ${e.message}`);
+                }
+            }
+
+            const updated = await this.prisma.server.update({
+                where: { id: server.id },
+                data: { status: ServerStatus.ACTIVE, expiresAt: newExpiry, renewalNotified: false },
+            });
+
+            this.logger.log(`Free server ${server.id} renewed with credits for ${renewalDays} days until ${newExpiry.toISOString()}`);;
+            return updated;
+        }
+
+        // Paid servers
+        const { price } = await this.getServerRenewalCost(userId, serverId);
+        if (price <= 0) throw new BadRequestException('This server has no renewal cost');
+
+        // Deduct balance atomically
+        const deducted = await this.prisma.$transaction(async (tx) => {
+            const balance = await tx.balance.findUnique({ where: { userId } });
+            if (!balance || balance.amount < price) return false;
+            await tx.balance.update({
+                where: { userId },
+                data: { amount: { decrement: price } },
+            });
+            await tx.balanceTransaction.create({
+                data: {
+                    userId,
+                    amount: -price,
+                    type: 'RENEWAL',
+                    description: `Renewal for server "${server.name}"`,
+                    relatedId: server.id,
+                },
+            });
+            return true;
+        });
+
+        if (!deducted) {
+            throw new BadRequestException(
+                `Insufficient balance. Renewal costs ₹${price} but you only have insufficient funds. Please add balance first.`,
+            );
+        }
+
+        const currentExpiry = server.expiresAt?.getTime() || Date.now();
+        const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + renewalDays * 24 * 60 * 60 * 1000);
+
+        // Unsuspend if suspended
+        if (server.status === ServerStatus.SUSPENDED && server.pteroServerId) {
+            try {
+                await this.pterodactyl.unsuspendServer(server.pteroServerId);
+            } catch (e: any) {
+                this.logger.error(`Failed to unsuspend server ${server.pteroServerId}: ${e.message}`);
+            }
+        }
+
+        const updated = await this.prisma.server.update({
+            where: { id: server.id },
+            data: { status: ServerStatus.ACTIVE, expiresAt: newExpiry, renewalNotified: false },
+        });
+
+        // Record payment
+        await this.prisma.payment.create({
+            data: {
+                userId,
+                serverId: server.id,
+                gateway: 'BALANCE',
+                amount: price,
+                status: 'COMPLETED',
+                metadata: { type: 'manual_renewal' },
+            },
+        });
+
+        this.logger.log(`Server ${server.id} renewed until ${newExpiry.toISOString()} (charged ₹${price})`);
+        return updated;
     }
 }

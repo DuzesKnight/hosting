@@ -5,7 +5,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import Link from 'next/link';
-import { Shield, Zap, Server, CreditCard, Puzzle, Globe, Menu, X, ChevronDown, Users, Clock, Sparkles, LayoutDashboard } from 'lucide-react';
+import { Shield, Zap, Server, CreditCard, Puzzle, Globe, Menu, X, ChevronDown, Users, Clock, LayoutDashboard } from 'lucide-react';
 import { plansApi, statsApi } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -417,7 +417,7 @@ const defaultStats = [
     { icon: Server, key: 'activeServers', value: '0', suffix: '+', label: 'Active Servers' },
     { icon: Users, key: 'totalUsers', value: '0', suffix: '+', label: 'Happy Players' },
     { icon: Clock, key: 'uptime', value: '99.9', suffix: '%', label: 'Uptime SLA' },
-    { icon: Sparkles, key: 'totalPlugins', value: '10', suffix: 'K+', label: 'Plugins Available' },
+    { icon: Server, key: 'totalServers', value: '0', suffix: '+', label: 'Total Servers' },
 ];
 
 const planColors = [
@@ -451,7 +451,7 @@ export default function LandingPage() {
                     { icon: Server, key: 'activeServers', value: String(d.activeServers || 0), suffix: '+', label: 'Active Servers' },
                     { icon: Users, key: 'totalUsers', value: String(d.totalUsers || 0), suffix: '+', label: 'Happy Players' },
                     { icon: Clock, key: 'uptime', value: String(d.uptime || '99.9'), suffix: '%', label: 'Uptime SLA' },
-                    { icon: Sparkles, key: 'totalPlugins', value: String(Math.floor(parseInt(d.totalPlugins || '10000') / 1000)), suffix: 'K+', label: 'Plugins Available' },
+                    { icon: Server, key: 'totalServers', value: String(d.totalServers || 0), suffix: '+', label: 'Total Servers' },
                 ]);
             }).catch(() => { });
         };

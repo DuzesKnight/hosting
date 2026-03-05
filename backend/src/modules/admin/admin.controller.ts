@@ -47,6 +47,9 @@ export class AdminController {
     @Post('servers/:id/unsuspend')
     unsuspend(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.unsuspendServer(id, user.id); }
 
+    @Delete('servers/:id')
+    deleteServer2(@Param('id') id: string, @CurrentUser() user: any) { return this.adminService.deleteServerAdmin(id, user.id); }
+
     // --- Plans ---
     @Post('plans')
     createPlan(@Body() body: CreatePlanDto, @CurrentUser() user: any) { return this.adminService.createPlan(body, user.id); }

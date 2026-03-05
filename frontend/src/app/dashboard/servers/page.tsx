@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { serversApi } from '@/lib/api';
 import Link from 'next/link';
-import { Server, ArrowUpRight, Plus, HardDrive, Cpu, MemoryStick, AlertCircle } from 'lucide-react';
+import { Server, ArrowUpRight, Plus, HardDrive, Cpu, MemoryStick, AlertCircle, Clock } from 'lucide-react';
 
 export default function ServersPage() {
     const [servers, setServers] = useState<any[]>([]);
@@ -64,6 +64,15 @@ export default function ServersPage() {
                                     <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" />{server.ram >= 1024 ? `${(server.ram / 1024).toFixed(1)} GB` : `${server.ram} MB`}</span>
                                     <span className="flex items-center gap-1"><Cpu className="w-4 h-4" />{server.cpu}%</span>
                                     <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" />{server.disk >= 1024 ? `${(server.disk / 1024).toFixed(1)} GB` : `${server.disk} MB`}</span>
+                                    {server.expiresAt && (
+                                        <span className={`flex items-center gap-1 ${
+                                            (new Date(server.expiresAt).getTime() - Date.now()) < 3 * 24 * 60 * 60 * 1000
+                                                ? 'text-orange-400' : ''
+                                        }`}>
+                                            <Clock className="w-4 h-4" />
+                                            {Math.max(0, Math.ceil((new Date(server.expiresAt).getTime() - Date.now()) / (24 * 60 * 60 * 1000)))}d left
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">

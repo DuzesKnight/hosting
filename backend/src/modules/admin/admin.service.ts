@@ -157,6 +157,23 @@ export class AdminService {
         return result;
     }
 
+    async deleteServerAdmin(serverId: string, adminId?: string) {
+        const server = await this.prisma.server.findUnique({ where: { id: serverId } });
+        if (!server) throw new ConflictException('Server not found');
+
+        // Delete from Pterodactyl
+        if (server.pteroServerId) {
+            try { await this.pterodactyl.deleteServer(server.pteroServerId); } catch { /* best effort */ }
+        }
+
+        const result = await this.prisma.server.update({
+            where: { id: serverId },
+            data: { status: ServerStatus.DELETED },
+        });
+        if (adminId) await this.createAuditLog(adminId, 'DELETE_SERVER', { serverId, serverName: server.name });
+        return result;
+    }
+
     // ---------- Plans ----------
     async createPlan(data: any, adminId?: string) {
         const result = await this.plansService.createPlan(data);

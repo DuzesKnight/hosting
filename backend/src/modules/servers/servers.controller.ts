@@ -139,4 +139,14 @@ export class ServersController {
     reinstall(@CurrentUser() user: any, @Param('id') id: string) {
         return this.serversService.reinstallServer(user.id, id);
     }
+
+    @Get(':id/renewal-cost')
+    getRenewalCost(@CurrentUser() user: any, @Param('id') id: string) {
+        return this.serversService.getServerRenewalCost(user.id, id);
+    }
+
+    @Post(':id/renew')
+    renewServer(@CurrentUser() user: any, @Param('id') id: string) {
+        return this.serversService.renewServer(user.id, id);
+    }
 }

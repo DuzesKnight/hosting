@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { plansApi } from '@/lib/api';
+import { plansApi, serversApi } from '@/lib/api';
 import { Check, Zap, Sliders, Loader2, PackageX } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -16,10 +16,15 @@ export default function PlansPage() {
     const [customPrice, setCustomPrice] = useState(0);
     const [limits, setLimits] = useState<any>(null);
     const [priceLoading, setPriceLoading] = useState(false);
+    const [hasFreeClaimed, setHasFreeClaimed] = useState(false);
     const router = useRouter();
 
     useEffect(() => {
         plansApi.list().then((r) => setPlans(r.data || [])).catch(() => { }).finally(() => setLoading(false));
+        serversApi.list().then((r) => {
+            const servers = r.data || [];
+            setHasFreeClaimed(servers.some((s: any) => s.isFreeServer));
+        }).catch(() => {});
     }, []);
 
     // Load plan limits when builder is opened
@@ -108,9 +113,15 @@ export default function PlansPage() {
                             <li className="flex items-center gap-2 text-sm"><Check className="w-4 h-4 text-primary" />{plan.databases} Databases</li>
                             <li className="flex items-center gap-2 text-sm"><Check className="w-4 h-4 text-primary" />Plugin Installer</li>
                         </ul>
-                        <Link href={`/dashboard/servers/create?plan=${plan.id}`} className="btn-primary text-center w-full">
-                            {plan.type === 'FREE' ? 'Deploy Free' : 'Deploy Server'}
-                        </Link>
+                        {plan.type === 'FREE' && hasFreeClaimed ? (
+                            <span className="btn-primary text-center w-full opacity-50 cursor-not-allowed inline-block">
+                                Already Claimed
+                            </span>
+                        ) : (
+                            <Link href={`/dashboard/servers/create?plan=${plan.id}`} className="btn-primary text-center w-full">
+                                {plan.type === 'FREE' ? 'Deploy Free' : 'Deploy Server'}
+                            </Link>
+                        )}
                     </div>
                 ))}
             </div>

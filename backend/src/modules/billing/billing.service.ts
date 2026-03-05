@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ServersService } from '../servers/servers.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
 import { DiscordService } from '../discord/discord.service';
+import { EmailService } from '../auth/email.service';
 import { PaymentGateway, PaymentStatus, ServerStatus, UpiStatus } from '@prisma/client';
 import axios from 'axios';
 import * as crypto from 'crypto';
@@ -19,6 +20,7 @@ export class BillingService {
         private serversService: ServersService,
         private pterodactyl: PterodactylService,
         private discord: DiscordService,
+        private email: EmailService,
     ) { }
 
     // ========== RAZORPAY ==========
@@ -26,6 +28,10 @@ export class BillingService {
     async createRazorpayOrder(userId: string, amount: number, serverId?: string): Promise<any> {
         if (this.config.get('RAZORPAY_ENABLED') !== 'true') {
             throw new BadRequestException('Razorpay is not enabled');
+        }
+
+        if (!amount || amount < 1 || amount > 100000) {
+            throw new BadRequestException('Amount must be between ₹1 and ₹1,00,000');
         }
 
         const Razorpay = require('razorpay');
@@ -110,6 +116,10 @@ export class BillingService {
     async createCashfreeOrder(userId: string, amount: number, serverId?: string): Promise<any> {
         if (this.config.get('CASHFREE_ENABLED') !== 'true') {
             throw new BadRequestException('Cashfree is not enabled');
+        }
+
+        if (!amount || amount < 1 || amount > 100000) {
+            throw new BadRequestException('Amount must be between ₹1 and ₹1,00,000');
         }
 
         const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -211,6 +221,14 @@ export class BillingService {
             throw new BadRequestException('UPI payments are not enabled');
         }
 
+        if (!amount || amount < 1 || amount > 100000) {
+            throw new BadRequestException('Amount must be between ₹1 and ₹1,00,000');
+        }
+
+        if (!utr || typeof utr !== 'string' || utr.trim().length < 6) {
+            throw new BadRequestException('Valid UTR reference is required (minimum 6 characters)');
+        }
+
         const upiPayment = await this.prisma.upiPayment.create({
             data: { userId, utr, amount, serverId, planId },
         });
@@ -303,6 +321,9 @@ export class BillingService {
     }
 
     async payWithBalance(userId: string, amount: number, serverId?: string): Promise<any> {
+        if (!amount || amount <= 0 || amount > 100000) {
+            throw new BadRequestException('Invalid payment amount');
+        }
         const deducted = await this.deductBalance(userId, amount, serverId ? 'RENEWAL' : 'DEDUCTION', serverId ? `Renewal for server ${serverId}` : 'Balance payment', serverId);
         if (!deducted) throw new BadRequestException('Insufficient balance');
 
@@ -328,10 +349,14 @@ export class BillingService {
 
         if (payment.serverId) {
             // Renewal: unsuspend and extend expiry
-            const server = await this.prisma.server.findUnique({ where: { id: payment.serverId } });
+            const server = await this.prisma.server.findUnique({
+                where: { id: payment.serverId },
+                include: { plan: true },
+            });
             if (server) {
+                const renewalDays = server.plan?.renewalPeriodDays || (server.isFreeServer ? 7 : 30);
                 const currentExpiry = server.expiresAt?.getTime() || Date.now();
-                const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + 30 * 24 * 60 * 60 * 1000);
+                const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + renewalDays * 24 * 60 * 60 * 1000);
 
                 // Unsuspend in Pterodactyl if server was suspended
                 if (server.status === ServerStatus.SUSPENDED && server.pteroServerId) {
@@ -371,8 +396,12 @@ export class BillingService {
         if (server.isFreeServer) return 0;
         if (!server.planId) return 0;
 
-        const plan = await this.prisma.plan.findUnique({ where: { id: server.planId } });
+        // Use included plan relation if available, otherwise fetch
+        const plan = server.plan || await this.prisma.plan.findUnique({ where: { id: server.planId } });
         if (!plan) return 0;
+
+        // Use explicit renewalCost if set on the plan
+        if (plan.renewalCost > 0) return plan.renewalCost;
 
         if (plan.type === 'CUSTOM') {
             const pricePerGb = plan.pricePerGb || 50;
@@ -416,6 +445,17 @@ export class BillingService {
                 renewalCost,
             );
 
+            // Send email notification
+            try {
+                await this.email.sendRenewalReminderEmail(
+                    server.user.email,
+                    server.user.name,
+                    server.name,
+                    daysLeft,
+                    renewalCost,
+                );
+            } catch { /* best effort — Discord is primary */ }
+
             // Log the notification
             this.logger.log(`Renewal reminder sent for server ${server.id} (${server.name}) — ${daysLeft} days left`);
 
@@ -432,7 +472,7 @@ export class BillingService {
                 isFreeServer: false,
                 expiresAt: { lte: threeDaysFromNow, gt: now },
             },
-            include: { user: { include: { balance: true } } },
+            include: { user: { include: { balance: true } }, plan: true },
         });
 
         for (const server of serversToAutoRenew) {
@@ -451,8 +491,9 @@ export class BillingService {
                 );
 
                 if (deducted) {
+                    const renewalDays = server.plan?.renewalPeriodDays || 30;
                     const currentExpiry = server.expiresAt?.getTime() || Date.now();
-                    const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + 30 * 24 * 60 * 60 * 1000);
+                    const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + renewalDays * 24 * 60 * 60 * 1000);
 
                     await this.prisma.server.update({
                         where: { id: server.id },

@@ -213,6 +213,10 @@ model Plan {
   maxBackups      Int?
   maxPorts        Int?
 
+  // Renewal settings
+  renewalPeriodDays Int          @default(7)
+  renewalCost       Float        @default(0)
+
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 

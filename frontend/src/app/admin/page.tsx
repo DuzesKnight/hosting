@@ -245,6 +245,8 @@ export default function AdminPage() {
                                                 className="text-xs px-3 py-1 rounded bg-orange-500/10 text-orange-400">Suspend</button>
                                             <button onClick={async () => { try { await adminApi.unsuspendServer(s.id); toast.success('Server unsuspended'); loadTab('servers'); } catch { toast.error('Failed to unsuspend'); } }}
                                                 className="text-xs px-3 py-1 rounded bg-green-500/10 text-green-400">Unsuspend</button>
+                                            <button onClick={async () => { if (!confirm(`Delete server "${s.name}"? This is irreversible.`)) return; try { await adminApi.deleteServer(s.id); toast.success('Server deleted'); loadTab('servers'); } catch { toast.error('Failed to delete'); } }}
+                                                className="text-xs px-3 py-1 rounded bg-red-500/10 text-red-400">Delete</button>
                                         </div>
                                     </div>
                                 ))}
@@ -347,7 +349,7 @@ export default function AdminPage() {
                         <div>
                             <div className="flex items-center justify-between mb-6">
                                 <h2 className="text-2xl font-display font-bold">Server Plans ({plans.length})</h2>
-                                <button onClick={() => setNewPlan({ name: '', type: 'FREE', ram: 1024, cpu: 100, disk: 5120, backups: 1, ports: 1, databases: 0, pricePerMonth: 0, isActive: true })}
+                                <button onClick={() => setNewPlan({ name: '', type: 'FREE', ram: 1024, cpu: 100, disk: 5120, backups: 1, ports: 1, databases: 0, pricePerMonth: 0, renewalPeriodDays: 7, renewalCost: 0, isActive: true })}
                                     className="btn-primary flex items-center gap-2 text-sm"><CreditCard className="w-4 h-4" /> New Plan</button>
                             </div>
 
@@ -396,6 +398,16 @@ export default function AdminPage() {
                                         <div>
                                             <label className="text-xs text-gray-400 mb-1 block">Databases</label>
                                             <input type="number" className="input-field text-sm" value={newPlan.databases} onChange={(e) => setNewPlan({ ...newPlan, databases: parseInt(e.target.value) || 0 })} />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-400 mb-1 block">Renewal Period (days)</label>
+                                            <input type="number" className="input-field text-sm" value={newPlan.renewalPeriodDays ?? 7} min={1}
+                                                onChange={(e) => setNewPlan({ ...newPlan, renewalPeriodDays: parseInt(e.target.value) || 7 })} />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-400 mb-1 block">Renewal Cost (₹, 0=same as price)</label>
+                                            <input type="number" className="input-field text-sm" value={newPlan.renewalCost ?? 0} step="0.01"
+                                                onChange={(e) => setNewPlan({ ...newPlan, renewalCost: parseFloat(e.target.value) || 0 })} />
                                         </div>
                                     </div>
                                     <div className="flex gap-3 mt-4">

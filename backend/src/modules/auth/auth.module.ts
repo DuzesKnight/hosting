@@ -9,6 +9,6 @@ import { PterodactylModule } from '../pterodactyl/pterodactyl.module';
     imports: [ConfigModule, PterodactylModule],
     controllers: [AuthController],
     providers: [AuthService, EmailService],
-    exports: [AuthService],
+    exports: [AuthService, EmailService],
 })
 export class AuthModule { }

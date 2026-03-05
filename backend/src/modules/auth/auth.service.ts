@@ -541,7 +541,7 @@ export class AuthService {
     async validateUser(userId: string) {
         return this.prisma.user.findUnique({
             where: { id: userId },
-            include: { balance: true, credits: true },
+            include: { balance: true, credits: true, linkedAccounts: true },
         });
     }
 }

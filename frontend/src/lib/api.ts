@@ -51,6 +51,8 @@ export const serversApi = {
     startup: (id: string) => api.get(`/servers/${id}/startup`),
     updateStartup: (id: string, key: string, value: string) => api.post(`/servers/${id}/startup`, { key, value }),
     reinstall: (id: string) => api.post(`/servers/${id}/reinstall`),
+    renewalCost: (id: string) => api.get(`/servers/${id}/renewal-cost`),
+    renew: (id: string) => api.post(`/servers/${id}/renew`),
 };
 
 // Public stats (no auth)
@@ -163,6 +165,7 @@ export const adminApi = {
     servers: (page = 1) => api.get(`/admin/servers?page=${page}`),
     suspendServer: (id: string) => api.post(`/admin/servers/${id}/suspend`),
     unsuspendServer: (id: string) => api.post(`/admin/servers/${id}/unsuspend`),
+    deleteServer: (id: string) => api.delete(`/admin/servers/${id}`),
     createPlan: (data: any) => api.post('/admin/plans', data),
     updatePlan: (id: string, data: any) => api.patch(`/admin/plans/${id}`, data),
     deletePlan: (id: string) => api.delete(`/admin/plans/${id}`),

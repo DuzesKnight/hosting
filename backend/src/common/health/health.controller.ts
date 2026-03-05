@@ -93,17 +93,17 @@ export class StatsController {
             return this.cache.data;
         }
 
-        const [activeServers, totalUsers, totalPlugins] = await Promise.all([
+        const [activeServers, totalUsers, totalServers] = await Promise.all([
             this.prisma.server.count({ where: { status: 'ACTIVE' } }),
             this.prisma.user.count(),
-            this.prisma.server.count(), // total servers ever as proxy for scale
+            this.prisma.server.count(),
         ]);
 
         const data = {
             activeServers,
             totalUsers,
+            totalServers,
             uptime: '99.9',
-            totalPlugins: '10000', // Modrinth + SpigotMC combined catalog
         };
 
         this.cache = { data, ts: Date.now() };

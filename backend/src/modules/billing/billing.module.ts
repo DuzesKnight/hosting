@@ -5,9 +5,10 @@ import { BillingService } from './billing.service';
 import { ServersModule } from '../servers/servers.module';
 import { PterodactylModule } from '../pterodactyl/pterodactyl.module';
 import { DiscordModule } from '../discord/discord.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-    imports: [ConfigModule, ServersModule, PterodactylModule, DiscordModule],
+    imports: [ConfigModule, ServersModule, PterodactylModule, DiscordModule, AuthModule],
     controllers: [BillingController],
     providers: [BillingService],
     exports: [BillingService],

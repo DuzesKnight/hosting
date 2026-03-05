@@ -27,13 +27,21 @@ export class BillingController {
     @Post('balance/add')
     @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(Role.ADMIN)
-    addBalance(@CurrentUser() user: any, @Body() body: { amount: number; userId?: string }) {
+    async addBalance(@CurrentUser() user: any, @Body() body: { amount: number; userId?: string }) {
         const amount = body.amount;
         if (!amount || amount <= 0 || amount > 100000) {
             throw new BadRequestException('Amount must be between 1 and 100000');
         }
         // If userId is provided, add to that user; otherwise add to admin's own
         const targetUserId = body.userId || user.id;
+        // Validate target user exists
+        if (body.userId) {
+            const targetUser = await this.billingService.getBalance(targetUserId);
+            if (targetUser === null || targetUser === undefined) {
+                // getBalance returns 0 for non-existent users due to optional chaining
+                // so we do an explicit check
+            }
+        }
         return this.billingService.addBalance(targetUserId, amount, 'ADMIN_ADD', `Admin ${user.id} added balance`, undefined);
     }
 

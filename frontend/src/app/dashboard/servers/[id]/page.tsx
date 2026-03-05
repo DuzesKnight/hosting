@@ -70,6 +70,8 @@ export default function ServerDetailPage() {
     const [consoleAutoScroll, setConsoleAutoScroll] = useState(true);
     const [pluginUpdates, setPluginUpdates] = useState<any[]>([]);
     const [checkingUpdates, setCheckingUpdates] = useState(false);
+    const [renewalCost, setRenewalCost] = useState<{ price: number; renewalDays: number; expiresAt: string | null; serverName: string; isFreeServer: boolean } | null>(null);
+    const [renewing, setRenewing] = useState(false);
 
     const serverId = id as string;
 
@@ -82,6 +84,13 @@ export default function ServerDetailPage() {
     }, [serverId]);
 
     useEffect(() => { loadServer(); }, [loadServer]);
+
+    // Load renewal cost
+    useEffect(() => {
+        serversApi.renewalCost(serverId as string)
+            .then((r) => setRenewalCost(r.data))
+            .catch(() => {});
+    }, [serverId]);
 
     // Auto-detect server software when server loads
     useEffect(() => {
@@ -209,6 +218,22 @@ export default function ServerDetailPage() {
             router.push('/dashboard/servers');
         } catch { toast.error('Failed to delete server'); }
         finally { setDeleting(false); }
+    };
+
+    const renewServer = async () => {
+        setRenewing(true);
+        try {
+            await serversApi.renew(serverId);
+            toast.success('Server renewed successfully!');
+            await loadServer();
+            // Refresh renewal cost
+            const r = await serversApi.renewalCost(serverId);
+            setRenewalCost(r.data);
+        } catch (e: any) {
+            toast.error(e?.response?.data?.message || 'Failed to renew server');
+        } finally {
+            setRenewing(false);
+        }
     };
 
     const loadFiles = async (dir: string) => {
@@ -440,7 +465,14 @@ export default function ServerDetailPage() {
                         <p className="text-gray-400 mb-4">This server has been suspended due to payment issues. Please renew to restore access.</p>
                         <div className="flex gap-3 justify-center">
                             <button onClick={() => router.back()} className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">Go Back</button>
-                            <a href="/dashboard/billing" className="btn-primary">Go to Billing</a>
+                            <button
+                                onClick={renewServer}
+                                disabled={renewing}
+                                className="btn-primary flex items-center gap-2"
+                            >
+                                {renewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                {renewing ? 'Renewing...' : renewalCost?.isFreeServer ? 'Renew (1 Credit)' : `Renew${renewalCost ? ` (₹${renewalCost.price})` : ''}`}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -483,6 +515,41 @@ export default function ServerDetailPage() {
                     </button>
                 </div>
             </div>
+
+            {/* Renewal Info Strip */}
+            {renewalCost && server.expiresAt && (
+                <div className={`glass-card p-3 mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                    new Date(server.expiresAt).getTime() - Date.now() < 3 * 24 * 60 * 60 * 1000
+                        ? 'border-orange-500/30 bg-orange-500/5'
+                        : 'border-white/5'
+                }`}>
+                    <div className="flex items-center gap-3 text-sm">
+                        <Info className="w-4 h-4 text-primary flex-shrink-0" />
+                        <span className="text-gray-400">
+                            {server.isFreeServer ? `Free Server · Renews every ${renewalCost.renewalDays}d (1 credit)` : `₹${renewalCost.price}/${renewalCost.renewalDays}d`}
+                            {' · '}
+                            Expires{' '}
+                            <span className={
+                                new Date(server.expiresAt).getTime() - Date.now() < 3 * 24 * 60 * 60 * 1000
+                                    ? 'text-orange-400 font-medium'
+                                    : 'text-white'
+                            }>
+                                {new Date(server.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </span>
+                            {' '}
+                            ({Math.max(0, Math.ceil((new Date(server.expiresAt).getTime() - Date.now()) / (24 * 60 * 60 * 1000)))} days left)
+                        </span>
+                    </div>
+                    <button
+                        onClick={renewServer}
+                        disabled={renewing}
+                        className="px-4 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors text-sm font-medium flex items-center gap-2 flex-shrink-0"
+                    >
+                        {renewing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        {renewing ? 'Renewing...' : renewalCost.isFreeServer ? 'Renew (1 Credit)' : `Renew${renewalCost.price > 0 ? ` ₹${renewalCost.price}` : ''}`}
+                    </button>
+                </div>
+            )}
 
             {/* Tabs */}
             <div className="flex gap-1 mb-6 overflow-x-auto pb-2">
