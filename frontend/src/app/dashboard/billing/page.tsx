@@ -34,6 +34,12 @@ export default function BillingPage() {
   const payRazorpay = async () => {
     setPayLoading(true);
     try {
+      if (!window.Razorpay) {
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+        await new Promise<void>((resolve, reject) => { script.onload = () => resolve(); script.onerror = () => reject(); document.body.appendChild(script); });
+      }
       const res = await billingApi.razorpayCreate(finalAmount);
       const { orderId, keyId, amount: orderAmt, currency } = res.data;
       const rzp = new window.Razorpay({
@@ -59,8 +65,8 @@ export default function BillingPage() {
         cf.checkout({ paymentSessionId: sessionId, returnUrl: window.location.href }).then(async () => {
           try { await billingApi.cashfreeVerify(orderId); toast.success('Payment successful!'); }
           catch { toast.error('Verification failed'); }
-        });
-      } else toast.error('Cashfree SDK not loaded');
+        }).catch(() => toast.error('Checkout failed or was cancelled'));
+      } else toast.error('Cashfree SDK not loaded. Please reload the page.');
     } catch (e: any) { toast.error(e?.response?.data?.message || 'Failed'); }
     finally { setPayLoading(false); }
   };

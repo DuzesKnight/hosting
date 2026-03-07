@@ -64,6 +64,36 @@ export class PlayersController {
         return this.playersService.unbanPlayer(uuid, player);
     }
 
+    @Get(':uuid/banned-ips')
+    async getBannedIps(@CurrentUser() user: any, @Param('uuid') uuid: string) {
+        await this.verifyOwnership(user, uuid);
+        return this.playersService.getBannedIps(uuid);
+    }
+
+    @Post(':uuid/ban-ip')
+    async banIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: { ip: string; reason?: string }) {
+        await this.verifyOwnership(user, uuid);
+        return this.playersService.banIp(uuid, body.ip, body.reason);
+    }
+
+    @Post(':uuid/unban-ip')
+    async unbanIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('ip') ip: string) {
+        await this.verifyOwnership(user, uuid);
+        return this.playersService.unbanIp(uuid, ip);
+    }
+
+    @Get(':uuid/playerdata')
+    async getPlayerData(@CurrentUser() user: any, @Param('uuid') uuid: string) {
+        await this.verifyOwnership(user, uuid);
+        return this.playersService.getPlayerData(uuid);
+    }
+
+    @Delete(':uuid/playerdata/:identifier')
+    async deletePlayerData(@CurrentUser() user: any, @Param('uuid') uuid: string, @Param('identifier') identifier: string) {
+        await this.verifyOwnership(user, uuid);
+        return this.playersService.deletePlayerData(uuid, identifier);
+    }
+
     @Get(':uuid/ops')
     async getOps(@CurrentUser() user: any, @Param('uuid') uuid: string) {
         await this.verifyOwnership(user, uuid);

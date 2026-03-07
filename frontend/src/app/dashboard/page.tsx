@@ -28,8 +28,8 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       serversApi.list().then(r => setServers(r.data)).catch(() => {}),
-      billingApi.balance().then(r => setBalance(r.data.balance ?? r.data.amount ?? 0)).catch(() => {}),
-      creditsApi.get().then(r => setCredits(r.data.amount ?? 0)).catch(() => {}),
+      billingApi.balance().then(r => setBalance(typeof r.data === 'number' ? r.data : (r.data?.balance ?? r.data?.amount ?? 0))).catch(() => {}),
+      creditsApi.get().then(r => setCredits(typeof r.data === 'number' ? r.data : (r.data?.amount ?? 0))).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 

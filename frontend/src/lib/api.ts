@@ -158,15 +158,20 @@ export const pluginsApi = {
     },
     modrinthInstall: (uuid: string, projectId: string, versionId: string) =>
         api.post(`/plugins/${uuid}/modrinth/install`, { projectId, versionId }),
-    spigetSearch: (q: string, page = 1, categoryId?: number, size = 20) =>
-        api.get(`/plugins/spiget/search?query=${encodeURIComponent(q)}&page=${page}&size=${size}${categoryId ? `&categoryId=${categoryId}` : ''}`),
+    spigetSearch: (q: string, page = 1, categoryId?: number, size = 20, sort = '-downloads') =>
+        api.get(`/plugins/spiget/search?query=${encodeURIComponent(q)}&page=${page}&size=${size}&sort=${encodeURIComponent(sort)}${categoryId ? `&categoryId=${categoryId}` : ''}`),
     spigetCategories: () => api.get('/plugins/spiget/categories'),
     spigetCategoryResources: (categoryId: number, page = 1, size = 20) =>
         api.get(`/plugins/spiget/categories/${categoryId}/resources?page=${page}&size=${size}`),
     spigetResource: (id: number) => api.get(`/plugins/spiget/resource/${id}`),
     spigetVersions: (id: number) => api.get(`/plugins/spiget/resource/${id}/versions`),
+    spigetPopular: (page = 1, size = 20) => api.get(`/plugins/spiget/popular?page=${page}&size=${size}`),
+    spigetNew: (page = 1, size = 20) => api.get(`/plugins/spiget/new?page=${page}&size=${size}`),
+    spigetUpdated: (page = 1, size = 20) => api.get(`/plugins/spiget/updated?page=${page}&size=${size}`),
     spigetInstall: (uuid: string, resourceId: number) =>
         api.post(`/plugins/${uuid}/spiget/install`, { resourceId }),
+    spigetInstallVersion: (uuid: string, resourceId: number, versionId: number) =>
+        api.post(`/plugins/${uuid}/spiget/install-version`, { resourceId, versionId }),
 };
 
 // Players
@@ -175,10 +180,15 @@ export const playersApi = {
     online: (uuid: string) => api.get(`/players/${uuid}/online`),
     whitelist: (uuid: string) => api.get(`/players/${uuid}/whitelist`),
     addWhitelist: (uuid: string, player: string) => api.post(`/players/${uuid}/whitelist`, { player }),
-    removeWhitelist: (uuid: string, player: string) => api.delete(`/players/${uuid}/whitelist/${player}`),
+    removeWhitelist: (uuid: string, player: string) => api.delete(`/players/${uuid}/whitelist/${encodeURIComponent(player)}`),
     banned: (uuid: string) => api.get(`/players/${uuid}/banned`),
     ban: (uuid: string, player: string, reason?: string) => api.post(`/players/${uuid}/ban`, { player, reason }),
     unban: (uuid: string, player: string) => api.post(`/players/${uuid}/unban`, { player }),
+    bannedIps: (uuid: string) => api.get(`/players/${uuid}/banned-ips`),
+    banIp: (uuid: string, ip: string, reason?: string) => api.post(`/players/${uuid}/ban-ip`, { ip, reason }),
+    unbanIp: (uuid: string, ip: string) => api.post(`/players/${uuid}/unban-ip`, { ip }),
+    playerData: (uuid: string) => api.get(`/players/${uuid}/playerdata`),
+    deletePlayerData: (uuid: string, identifier: string) => api.delete(`/players/${uuid}/playerdata/${encodeURIComponent(identifier)}`),
     ops: (uuid: string) => api.get(`/players/${uuid}/ops`),
     op: (uuid: string, player: string) => api.post(`/players/${uuid}/op`, { player }),
     deop: (uuid: string, player: string) => api.post(`/players/${uuid}/deop`, { player }),

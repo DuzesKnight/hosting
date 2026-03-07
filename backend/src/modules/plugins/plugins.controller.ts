@@ -106,9 +106,25 @@ export class PluginsController {
         @Query('page') page?: string,
         @Query('size') size?: string,
         @Query('categoryId') categoryId?: string,
+        @Query('sort') sort?: string,
     ) {
         const parsedCategoryId = categoryId ? parseInt(categoryId) : undefined;
-        return this.pluginsService.searchSpiget(query, parseInt(page || '1'), parseInt(size || '20'), parsedCategoryId);
+        return this.pluginsService.searchSpiget(query, parseInt(page || '1'), parseInt(size || '20'), parsedCategoryId, sort || '-downloads');
+    }
+
+    @Get('spiget/popular')
+    getSpigetPopular(@Query('page') page?: string, @Query('size') size?: string) {
+        return this.pluginsService.listSpigetPopular(parseInt(page || '1'), parseInt(size || '20'));
+    }
+
+    @Get('spiget/new')
+    getSpigetNew(@Query('page') page?: string, @Query('size') size?: string) {
+        return this.pluginsService.listSpigetNew(parseInt(page || '1'), parseInt(size || '20'));
+    }
+
+    @Get('spiget/updated')
+    getSpigetUpdated(@Query('page') page?: string, @Query('size') size?: string) {
+        return this.pluginsService.listSpigetUpdated(parseInt(page || '1'), parseInt(size || '20'));
     }
 
     @Get('spiget/categories')
@@ -139,6 +155,16 @@ export class PluginsController {
     async installSpiget(@CurrentUser() user: any, @Param('serverUuid') uuid: string, @Body('resourceId') resourceId: number) {
         await this.verifyOwnership(user, uuid);
         return this.pluginsService.installFromSpiget(uuid, resourceId);
+    }
+
+    @Post(':serverUuid/spiget/install-version')
+    async installSpigetVersion(
+        @CurrentUser() user: any,
+        @Param('serverUuid') uuid: string,
+        @Body() body: { resourceId: number; versionId: number },
+    ) {
+        await this.verifyOwnership(user, uuid);
+        return this.pluginsService.installFromSpigetVersion(uuid, body.resourceId, body.versionId);
     }
 
     @Post(':serverUuid/update-one')

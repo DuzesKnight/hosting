@@ -38,6 +38,143 @@ export class PlayersService {
     }
 
     /**
+     * Validate an IP string (IPv4/IPv6) to prevent command injection.
+     */
+    private validateIp(ip: string): string {
+        const value = ip?.trim();
+        if (!value) {
+            throw new BadRequestException('IP is required');
+        }
+        if (value.length > 64) {
+            throw new BadRequestException('IP is too long');
+        }
+        if (!/^[0-9a-fA-F:.]+$/.test(value)) {
+            throw new BadRequestException('Invalid IP address format');
+        }
+        return value;
+    }
+
+    /**
+     * Quote command args that contain spaces so Bedrock names remain a single argument.
+     */
+    private quoteArg(value: string): string {
+        return value.includes(' ') ? `"${value}"` : value;
+    }
+
+    private normalizeUuid(value?: string | null): string | null {
+        const trimmed = value?.trim().toLowerCase();
+        if (!trimmed) return null;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(trimmed)) {
+            return trimmed;
+        }
+        if (/^[0-9a-f]{32}$/.test(trimmed)) {
+            return `${trimmed.slice(0, 8)}-${trimmed.slice(8, 12)}-${trimmed.slice(12, 16)}-${trimmed.slice(16, 20)}-${trimmed.slice(20)}`;
+        }
+        return null;
+    }
+
+    private isDirectory(entry: any): boolean {
+        return entry?.is_file === false || entry?.mime === 'inode/directory';
+    }
+
+    private readServerPropertiesLevelName(content: string | null): string {
+        if (!content) return 'world';
+        const lines = content.split(/\r?\n/);
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            if (!trimmed.startsWith('level-name=')) continue;
+            const raw = trimmed.substring('level-name='.length).trim().replace(/\\/g, '/');
+            const cleaned = raw.replace(/^\/+/, '');
+            if (!cleaned || cleaned.includes('..')) return 'world';
+            return cleaned;
+        }
+        return 'world';
+    }
+
+    private async getUserCacheMaps(serverUuid: string): Promise<{ byUuid: Map<string, string>; byName: Map<string, string> }> {
+        const byUuid = new Map<string, string>();
+        const byName = new Map<string, string>();
+        const usercache = await this.readJsonFile(serverUuid, '/usercache.json');
+        for (const row of usercache) {
+            const name = typeof row?.name === 'string' ? row.name.trim() : '';
+            const uuid = this.normalizeUuid(typeof row?.uuid === 'string' ? row.uuid : null);
+            if (!name || !uuid) continue;
+            byUuid.set(uuid, name);
+            byName.set(name.toLowerCase(), uuid);
+        }
+        return { byUuid, byName };
+    }
+
+    private async getWorldDirs(serverUuid: string): Promise<string[]> {
+        const worldDirs = new Set<string>();
+        const serverProperties = await this.pterodactylClient.getFileContents(serverUuid, '/server.properties');
+        const levelName = this.readServerPropertiesLevelName(serverProperties);
+
+        [
+            `/${levelName}`,
+            `/${levelName}_nether`,
+            `/${levelName}_the_end`,
+            '/world',
+            '/world_nether',
+            '/world_the_end',
+        ].forEach((dir) => worldDirs.add(dir));
+
+        try {
+            const rootEntries = await this.pterodactylClient.listFiles(serverUuid, '/');
+            for (const entry of rootEntries) {
+                if (!this.isDirectory(entry)) continue;
+                const name = String(entry?.name || '').trim().replace(/^\/+/, '');
+                if (!name || name.startsWith('.') || name.includes('..') || name.includes('\\')) continue;
+                const dir = `/${name}`;
+                if (worldDirs.has(dir)) continue;
+                const children = await this.pterodactylClient.listFiles(serverUuid, dir).catch(() => []);
+                const childNames = children.map((c: any) => String(c?.name || '').toLowerCase());
+                if (childNames.includes('playerdata') || childNames.includes('stats') || childNames.includes('advancements')) {
+                    worldDirs.add(dir);
+                }
+            }
+        } catch (e) {
+            this.logger.warn(`Failed to enumerate world directories for ${serverUuid}: ${e.message}`);
+        }
+
+        const confirmed: string[] = [];
+        for (const dir of worldDirs) {
+            const children = await this.pterodactylClient.listFiles(serverUuid, dir).catch(() => []);
+            const childNames = children.map((c: any) => String(c?.name || '').toLowerCase());
+            if (childNames.includes('playerdata') || childNames.includes('stats') || childNames.includes('advancements')) {
+                confirmed.push(dir);
+            }
+        }
+
+        if (confirmed.length > 0) return confirmed;
+        return [`/${levelName}`];
+    }
+
+    private async ensureOfflineForPlayerDataDelete(serverUuid: string): Promise<void> {
+        const resources = await this.pterodactylClient.getServerResources(serverUuid);
+        const state = String(resources?.current_state || '').toLowerCase();
+        if (state && state !== 'offline') {
+            throw new BadRequestException('Stop your server before deleting player data.');
+        }
+    }
+
+    private async resolvePlayerDataUuid(serverUuid: string, identifier: string): Promise<string> {
+        const trimmed = identifier?.trim();
+        if (!trimmed) {
+            throw new BadRequestException('Player name or UUID is required');
+        }
+        const parsedUuid = this.normalizeUuid(trimmed);
+        if (parsedUuid) return parsedUuid;
+        const { byName } = await this.getUserCacheMaps(serverUuid);
+        const fromCache = byName.get(trimmed.toLowerCase());
+        if (!fromCache) {
+            throw new BadRequestException('Unknown player name. Use a UUID or a player that has joined before.');
+        }
+        return fromCache;
+    }
+
+    /**
      * Read and parse a Minecraft JSON file (whitelist.json, banned-players.json, ops.json).
      * Returns empty array on failure with proper logging.
      */
@@ -126,14 +263,14 @@ export class PlayersService {
 
     async addToWhitelist(serverUuid: string, player: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
-        const result = await this.pterodactylClient.sendCommand(serverUuid, `whitelist add ${name}`);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `whitelist add ${this.quoteArg(name)}`);
         if (result) await this.delay();
         return result;
     }
 
     async removeFromWhitelist(serverUuid: string, player: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
-        const result = await this.pterodactylClient.sendCommand(serverUuid, `whitelist remove ${name}`);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `whitelist remove ${this.quoteArg(name)}`);
         if (result) {
             // Some servers need an explicit reload to update the JSON
             await this.pterodactylClient.sendCommand(serverUuid, 'whitelist reload');
@@ -151,7 +288,7 @@ export class PlayersService {
     async banPlayer(serverUuid: string, player: string, reason?: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
         const safeReason = this.sanitizeReason(reason);
-        const cmd = safeReason ? `ban ${name} ${safeReason}` : `ban ${name}`;
+        const cmd = safeReason ? `ban ${this.quoteArg(name)} ${safeReason}` : `ban ${this.quoteArg(name)}`;
         const result = await this.pterodactylClient.sendCommand(serverUuid, cmd);
         if (result) await this.delay();
         return result;
@@ -159,9 +296,120 @@ export class PlayersService {
 
     async unbanPlayer(serverUuid: string, player: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
-        const result = await this.pterodactylClient.sendCommand(serverUuid, `pardon ${name}`);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `pardon ${this.quoteArg(name)}`);
         if (result) await this.delay();
         return result;
+    }
+
+    // ========== BANNED IPS ==========
+
+    async getBannedIps(serverUuid: string): Promise<any[]> {
+        return this.readJsonFile(serverUuid, '/banned-ips.json');
+    }
+
+    async banIp(serverUuid: string, ip: string, reason?: string): Promise<boolean> {
+        const safeIp = this.validateIp(ip);
+        const safeReason = this.sanitizeReason(reason);
+        const cmd = safeReason ? `ban-ip ${safeIp} ${safeReason}` : `ban-ip ${safeIp}`;
+        const result = await this.pterodactylClient.sendCommand(serverUuid, cmd);
+        if (result) await this.delay();
+        return result;
+    }
+
+    async unbanIp(serverUuid: string, ip: string): Promise<boolean> {
+        const safeIp = this.validateIp(ip);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `pardon-ip ${safeIp}`);
+        if (result) await this.delay();
+        return result;
+    }
+
+    // ========== PLAYER DATA ==========
+
+    async getPlayerData(serverUuid: string): Promise<{ players: any[]; worlds: string[] }> {
+        const worldDirs = await this.getWorldDirs(serverUuid);
+        const { byUuid } = await this.getUserCacheMaps(serverUuid);
+        const players = new Map<string, { uuid: string; name: string | null; worlds: Set<string>; files: Set<string>; lastModified: string | null }>();
+
+        for (const world of worldDirs) {
+            const playerdataDir = `${world}/playerdata`;
+            const files = await this.pterodactylClient.listFiles(serverUuid, playerdataDir).catch(() => []);
+            for (const file of files) {
+                const name = String(file?.name || '');
+                if (!name.endsWith('.dat')) continue;
+                const uuid = this.normalizeUuid(name.slice(0, -4));
+                if (!uuid) continue;
+                const current = players.get(uuid) || {
+                    uuid,
+                    name: byUuid.get(uuid) || null,
+                    worlds: new Set<string>(),
+                    files: new Set<string>(),
+                    lastModified: null,
+                };
+                current.worlds.add(world);
+                current.files.add(`${playerdataDir}/${name}`);
+                const modified = typeof file?.modified_at === 'string'
+                    ? file.modified_at
+                    : (typeof file?.modifiedAt === 'string' ? file.modifiedAt : null);
+                if (modified && (!current.lastModified || modified > current.lastModified)) {
+                    current.lastModified = modified;
+                }
+                players.set(uuid, current);
+            }
+        }
+
+        const rows = Array.from(players.values())
+            .map((row) => ({
+                uuid: row.uuid,
+                name: row.name,
+                worlds: Array.from(row.worlds),
+                files: Array.from(row.files),
+                fileCount: row.files.size,
+                lastModified: row.lastModified,
+            }))
+            .sort((a, b) => {
+                const aKey = (a.name || a.uuid).toLowerCase();
+                const bKey = (b.name || b.uuid).toLowerCase();
+                return aKey.localeCompare(bKey);
+            });
+
+        return { players: rows, worlds: worldDirs };
+    }
+
+    async deletePlayerData(serverUuid: string, identifier: string): Promise<{ uuid: string; deletedFiles: string[]; deletedCount: number }> {
+        await this.ensureOfflineForPlayerDataDelete(serverUuid);
+        const uuid = await this.resolvePlayerDataUuid(serverUuid, identifier);
+        const compact = uuid.replace(/-/g, '');
+        const worldDirs = await this.getWorldDirs(serverUuid);
+        const deletedFiles: string[] = [];
+
+        for (const world of worldDirs) {
+            const targets: Array<{ root: string; names: string[] }> = [
+                { root: `${world}/playerdata`, names: [`${uuid}.dat`, `${compact}.dat`] },
+                { root: `${world}/stats`, names: [`${uuid}.json`, `${compact}.json`] },
+                { root: `${world}/advancements`, names: [`${uuid}.json`, `${compact}.json`] },
+            ];
+
+            for (const target of targets) {
+                const existing = await this.pterodactylClient.listFiles(serverUuid, target.root).catch(() => []);
+                const existingNames = new Set(existing.map((file: any) => String(file?.name || '')));
+                const toDelete = target.names.filter((name) => existingNames.has(name));
+                if (toDelete.length === 0) continue;
+                const deleted = await this.pterodactylClient.deleteFiles(serverUuid, target.root, toDelete);
+                if (!deleted) {
+                    this.logger.warn(`Failed to delete some player data files in ${target.root} for ${uuid}`);
+                    continue;
+                }
+                for (const name of toDelete) {
+                    deletedFiles.push(`${target.root}/${name}`);
+                }
+            }
+        }
+
+        if (deletedFiles.length === 0) {
+            throw new BadRequestException('No player data files found for this player.');
+        }
+
+        return { uuid, deletedFiles, deletedCount: deletedFiles.length };
     }
 
     // ========== OPS ==========
@@ -172,14 +420,14 @@ export class PlayersService {
 
     async opPlayer(serverUuid: string, player: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
-        const result = await this.pterodactylClient.sendCommand(serverUuid, `op ${name}`);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `op ${this.quoteArg(name)}`);
         if (result) await this.delay();
         return result;
     }
 
     async deopPlayer(serverUuid: string, player: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
-        const result = await this.pterodactylClient.sendCommand(serverUuid, `deop ${name}`);
+        const result = await this.pterodactylClient.sendCommand(serverUuid, `deop ${this.quoteArg(name)}`);
         if (result) await this.delay();
         return result;
     }
@@ -189,7 +437,7 @@ export class PlayersService {
     async kickPlayer(serverUuid: string, player: string, reason?: string): Promise<boolean> {
         const name = this.validatePlayerName(player);
         const safeReason = this.sanitizeReason(reason);
-        const cmd = safeReason ? `kick ${name} ${safeReason}` : `kick ${name}`;
+        const cmd = safeReason ? `kick ${this.quoteArg(name)} ${safeReason}` : `kick ${this.quoteArg(name)}`;
         return this.pterodactylClient.sendCommand(serverUuid, cmd);
     }
 }

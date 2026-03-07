@@ -31,8 +31,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    billingApi.balance().then(r => setBalance(r.data.balance ?? r.data.amount ?? 0)).catch(() => {});
-    creditsApi.get().then(r => setCredits(r.data.amount ?? 0)).catch(() => {});
+    billingApi.balance().then(r => setBalance(typeof r.data === 'number' ? r.data : (r.data?.balance ?? r.data?.amount ?? 0))).catch(() => {});
+    creditsApi.get().then(r => setCredits(typeof r.data === 'number' ? r.data : (r.data?.amount ?? 0))).catch(() => {});
     settingsApi.public().then(r => {
       const s = r.data;
       if (s.VPS_ENABLED === 'true' || s.VPS_ENABLED === true) setVpsEnabled(true);

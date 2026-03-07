@@ -198,16 +198,35 @@ export class PluginsService {
             if (software === 'fabric' || software === 'forge') type = 'mod';
             if (software === 'paper' || software === 'spigot' || software === 'bukkit' || software === 'velocity' || software === 'bungeecord') type = 'plugin';
 
-            const minecraftVersion = this.normalizeMcVersion(
-                startupMap.MINECRAFT_VERSION
+            let rawMcVersion = startupMap.MINECRAFT_VERSION
                 || startupMap.MC_VERSION
                 || startupMap.SERVER_VERSION
                 || startupMap.VERSION
                 || startupMap.PAPER_VERSION
                 || startupMap.PURPUR_VERSION
-                || startupMap.FABRIC_LOADER_VERSION
-                || null,
-            );
+                || null;
+
+            // Try to read version from server.properties if not found in startup vars
+            if (!rawMcVersion && hasServerProperties) {
+                try {
+                    const propsRaw = await this.pterodactylClient.getFileContents(serverUuid, '/server.properties');
+                    if (propsRaw) {
+                        // Look for lines like "# Minecraft server version" comment or parse version from context
+                        const lines = propsRaw.split('\n');
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            // Some server.properties files have a version comment at the top
+                            const verMatch = trimmed.match(/(?:version|server).*?(\d+\.\d+(?:\.\d+)?)/i);
+                            if (verMatch) {
+                                rawMcVersion = verMatch[1];
+                                break;
+                            }
+                        }
+                    }
+                } catch { /* best-effort only */ }
+            }
+
+            const minecraftVersion = this.normalizeMcVersion(rawMcVersion || null);
 
             const startupHint = `${startupMap.SERVER_JARFILE || ''} ${startupMap.STARTUP || ''}`.toLowerCase();
             const isMinecraft = (
@@ -378,7 +397,7 @@ export class PluginsService {
         }
     }
 
-    async searchSpiget(query: string, page = 1, size = 20, categoryId?: number): Promise<any[]> {
+    async searchSpiget(query: string, page = 1, size = 20, categoryId?: number, sort = '-downloads'): Promise<any[]> {
         try {
             const trimmed = query?.trim() || '';
 
@@ -394,11 +413,47 @@ export class PluginsService {
             }
 
             const { data } = await axios.get(`${this.spigetApi}/search/resources/${encodeURIComponent(trimmed || 'plugin')}`, {
-                params: { page, size, sort: '-downloads', field: 'name' },
+                params: { page, size, sort, field: 'name' },
             });
             return Array.isArray(data) ? data : [];
         } catch (e) {
             this.logger.error(`Spiget search failed: ${e.message}`);
+            return [];
+        }
+    }
+
+    async listSpigetPopular(page = 1, size = 20): Promise<any[]> {
+        try {
+            const { data } = await axios.get(`${this.spigetApi}/resources/free`, {
+                params: { page, size, sort: '-downloads' },
+            });
+            return Array.isArray(data) ? data : [];
+        } catch (e) {
+            this.logger.error(`Spiget popular failed: ${e.message}`);
+            return [];
+        }
+    }
+
+    async listSpigetNew(page = 1, size = 20): Promise<any[]> {
+        try {
+            const { data } = await axios.get(`${this.spigetApi}/resources/new`, {
+                params: { page, size },
+            });
+            return Array.isArray(data) ? data : [];
+        } catch (e) {
+            this.logger.error(`Spiget new failed: ${e.message}`);
+            return [];
+        }
+    }
+
+    async listSpigetUpdated(page = 1, size = 20): Promise<any[]> {
+        try {
+            const { data } = await axios.get(`${this.spigetApi}/resources/free`, {
+                params: { page, size, sort: '-updateDate' },
+            });
+            return Array.isArray(data) ? data : [];
+        } catch (e) {
+            this.logger.error(`Spiget recently updated failed: ${e.message}`);
             return [];
         }
     }
@@ -488,6 +543,66 @@ export class PluginsService {
         } catch (e) {
             if (e instanceof BadRequestException) throw e;
             this.logger.error(`Install from Modrinth failed: ${e.message}`);
+            return { success: false };
+        }
+    }
+
+    async installFromSpigetVersion(serverUuid: string, resourceId: number, versionId: number): Promise<any> {
+        const profile = await this.detectServerSoftware(serverUuid);
+        if (!profile.isMinecraft) throw new BadRequestException('Plugin system is only available for Minecraft servers');
+        if (profile.type === 'mod') {
+            throw new BadRequestException('SpigotMC source is for plugin servers. Use Modrinth for mods.');
+        }
+
+        try {
+            const resource = await this.getSpigetResource(resourceId);
+            if (!resource) throw new BadRequestException('Spigot resource not found');
+            if (resource.premium) throw new BadRequestException('Premium resources cannot be installed automatically.');
+            if (resource.external) throw new BadRequestException('This resource is hosted externally. Please download it manually.');
+
+            const downloadUrl = `${this.spigetApi}/resources/${resourceId}/versions/${versionId}/download`;
+            const { data: fileData, headers } = await axios.get(downloadUrl, {
+                responseType: 'arraybuffer',
+                maxRedirects: 5,
+                timeout: 30000,
+                headers: { 'User-Agent': 'GameHost/1.0' },
+            });
+
+            const contentType = headers['content-type'] || '';
+            if (String(contentType).includes('text/html') || String(contentType).includes('text/plain')) {
+                throw new BadRequestException('Download failed — resource may be external or unavailable.');
+            }
+
+            const fileName = headers['content-disposition']?.match(/filename="?([^";\s]+)"?/)?.[1]
+                || `${String(resource.name || `plugin_${resourceId}`).replace(/[^a-zA-Z0-9._-]/g, '_')}.jar`;
+
+            const uploadUrl = await this.pterodactylClient.uploadFileUrl(serverUuid, '/plugins');
+            if (!uploadUrl) throw new BadRequestException('Failed to get upload URL from panel');
+
+            const form = new FormData();
+            form.append('files', Buffer.from(fileData), { filename: fileName });
+            await axios.post(uploadUrl, form, {
+                headers: form.getHeaders(),
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+            });
+
+            await this.upsertRegistryEntry(serverUuid, {
+                fileName,
+                source: 'spiget',
+                type: 'plugin',
+                resourceId,
+                versionId: String(versionId),
+                versionName: String(versionId),
+                title: String(resource.name || `Spiget ${resourceId}`),
+                installedAt: new Date().toISOString(),
+            });
+
+            this.logger.log(`Installed ${fileName} from Spiget (version ${versionId})`);
+            return { success: true, fileName, versionId: String(versionId) };
+        } catch (e) {
+            if (e instanceof BadRequestException) throw e;
+            this.logger.error(`Install from Spiget version failed: ${e.message}`);
             return { success: false };
         }
     }

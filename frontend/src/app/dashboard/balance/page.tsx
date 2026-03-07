@@ -14,8 +14,8 @@ export default function BalancePage() {
 
   useEffect(() => {
     Promise.all([
-      billingApi.balance().then(r => setBalance(r.data?.amount ?? r.data?.balance ?? r.data ?? 0)),
-      billingApi.transactions().then(r => setTransactions(r.data?.data || r.data || [])).catch(() => {}),
+      billingApi.balance().then(r => setBalance(typeof r.data === 'number' ? r.data : (r.data?.amount ?? r.data?.balance ?? 0))),
+      billingApi.transactions().then(r => setTransactions(r.data?.transactions || r.data?.data || (Array.isArray(r.data) ? r.data : []))).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
