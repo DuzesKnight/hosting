@@ -317,16 +317,30 @@ export class PluginsService {
         gameVersions?: string[];
     } = {}): Promise<any> {
         try {
+            const trimmedQuery = query?.trim() || '';
             const params: any = {
-                query: query?.trim() || 'minecraft',
                 limit: opts.limit || 20,
                 offset: opts.offset || 0,
                 index: opts.index || 'relevance',
             };
+            // Modrinth API accepts empty query — it then sorts purely by the index
+            // (relevance/downloads/follows/updated/newest). Only set query when provided.
+            if (trimmedQuery) {
+                params.query = trimmedQuery;
+            }
 
             const facets: string[][] = [];
             if (opts.facets?.length) facets.push(...opts.facets);
-            if (opts.projectType) facets.push([`project_type:${opts.projectType}`]);
+
+            // For plugin servers: search both project_type:plugin AND project_type:mod
+            // because many server-side plugins on Modrinth are classified as mods
+            // that support plugin loaders (paper, spigot, bukkit, etc.)
+            if (opts.projectType === 'plugin') {
+                facets.push([`project_type:plugin`, `project_type:mod`]);
+            } else if (opts.projectType) {
+                facets.push([`project_type:${opts.projectType}`]);
+            }
+
             if (opts.loaders?.length) facets.push(opts.loaders.map((l) => `categories:${l}`));
             if (opts.categories?.length) facets.push(opts.categories.map((c) => `categories:${c}`));
             if (opts.gameVersions?.length) facets.push(opts.gameVersions.map((v) => `versions:${v}`));

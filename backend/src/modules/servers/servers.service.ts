@@ -415,12 +415,20 @@ export class ServersService {
     async getConsoleWebsocket(userId: string, serverId: string) {
         const server = await this.prisma.server.findFirst({ where: { id: serverId, userId } });
         if (!server) throw new NotFoundException('Server not found');
+        if (server.status === ServerStatus.SUSPENDED) throw new BadRequestException('Server is suspended. Please renew to access the console.');
+        if (server.status === ServerStatus.EXPIRED) throw new BadRequestException('Server has expired. Please renew it first.');
+        if (server.status === ServerStatus.DELETED) throw new BadRequestException('Server has been deleted');
+        if (server.status === ServerStatus.INSTALLING) throw new BadRequestException('Server is still installing. Please wait.');
         return this.pterodactylClient.getWebsocketCredentials(this.getClientServerRef(server));
     }
 
     async sendConsoleCommand(userId: string, serverId: string, command: string) {
         const server = await this.prisma.server.findFirst({ where: { id: serverId, userId } });
         if (!server) throw new NotFoundException('Server not found');
+        if (server.status === ServerStatus.SUSPENDED) throw new BadRequestException('Server is suspended. Please renew to send commands.');
+        if (server.status === ServerStatus.EXPIRED) throw new BadRequestException('Server has expired. Please renew it first.');
+        if (server.status === ServerStatus.DELETED) throw new BadRequestException('Server has been deleted');
+        if (server.status === ServerStatus.INSTALLING) throw new BadRequestException('Server is still installing. Please wait.');
         return this.pterodactylClient.sendCommand(this.getClientServerRef(server), command);
     }
 

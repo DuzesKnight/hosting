@@ -256,7 +256,7 @@ function ConsoleTab({ serverId }: { serverId: string }) {
   const reconnectTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(false);
   const retriesRef = useRef(0);
-  const MAX_RETRIES = 8;
+  const MAX_RETRIES = 5;
 
   const appendLines = useCallback((input: string | string[]) => {
     const next = (Array.isArray(input) ? input : [input])
@@ -282,8 +282,8 @@ function ConsoleTab({ serverId }: { serverId: string }) {
       return;
     }
     retriesRef.current += 1;
-    // Exponential backoff: 1.5s, 3s, 6s, 12s… capped at 30s
-    const backoff = Math.min(delay * Math.pow(2, retriesRef.current - 1), 30000);
+    // Exponential backoff: 3s, 6s, 12s, 24s, 48s — gives Pterodactyl rate limit time to recover
+    const backoff = Math.min(delay * Math.pow(2, retriesRef.current - 1), 60000);
     clearReconnectTimer();
     reconnectTimerRef.current = window.setTimeout(() => {
       if (!mountedRef.current) return;
@@ -307,53 +307,15 @@ function ConsoleTab({ serverId }: { serverId: string }) {
         wsRef.current = null;
       }
 
-      let res;
-      try {
-        res = await serversApi.console(serverId);
-      } catch (apiErr: any) {
-        const status = apiErr?.response?.status;
-        const msg = apiErr?.response?.data?.message || apiErr?.message || 'unknown';
-        if (status === 404) {
-          appendLines('[system] Server not found. It may not be linked to the panel yet.');
-          setConnecting(false);
-          setFailed(true);
-          return;
-        }
-        if (status === 401 || status === 403) {
-          appendLines('[system] Authentication error. Please log in again.');
-          setConnecting(false);
-          setFailed(true);
-          return;
-        }
-        if (status === 409) {
-          appendLines('[system] Server is suspended or installing. Console is unavailable until the server is active.');
-          setConnecting(false);
-          setFailed(true);
-          return;
-        }
-        if (status === 502 || status === 503) {
-          appendLines('[system] Panel is unreachable. Check your Pterodactyl configuration.');
-          setConnecting(false);
-          setFailed(true);
-          return;
-        }
-        throw new Error(msg);
-      }
-
-      const socket = res.data?.socket;
-      const token = res.data?.token;
-      if (!socket || !token) {
-        appendLines('[system] Failed to get console credentials. Is the server linked to the panel?');
-        setConnecting(false);
-        setFailed(true);
-        return;
-      }
-
-      const ws = new WebSocket(socket);
+      // Connect through our backend WebSocket proxy (avoids Wings 403 Origin check)
+      // The proxy handles auth, ownership, and credentials server-side.
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/api/servers/${serverId}/ws`;
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ event: 'auth', args: [token] }));
+        // Auth is handled server-side by the proxy — no need to send auth event
       };
 
       ws.onmessage = (message) => {
@@ -385,15 +347,7 @@ function ConsoleTab({ serverId }: { serverId: string }) {
           }
 
           if (event === 'token expiring') {
-            serversApi.console(serverId).then((r) => {
-              const newToken = r.data?.token;
-              if (newToken && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ event: 'auth', args: [newToken] }));
-              }
-            }).catch(() => {
-              appendLines('[system] Token refresh failed, reconnecting...');
-              ws.close();
-            });
+            // Token refresh is handled automatically by the backend proxy
             return;
           }
 
@@ -416,21 +370,21 @@ function ConsoleTab({ serverId }: { serverId: string }) {
         if (!mountedRef.current) return;
         setConnected(false);
         setConnecting(true);
-        reconnect(1500);
+        reconnect(3000);
       };
 
       ws.onerror = () => {
         if (!mountedRef.current) return;
         setConnected(false);
         setConnecting(true);
-        reconnect(3000);
+        reconnect(5000);
       };
     } catch (e: any) {
       if (!mountedRef.current) return;
       setConnected(false);
       setConnecting(true);
       appendLines(`[system] Connection error: ${e?.message || 'unknown'}`);
-      reconnect(3000);
+      reconnect(5000);
     }
   }, [appendLines, clearReconnectTimer, reconnect, serverId]);
   connectRef.current = connect;
@@ -1057,6 +1011,9 @@ function PluginsTab({ serverUuid, profile }: { serverUuid: string; profile: any 
     setSelectedCategory('');
     setCurrentPage(0);
     setResults([]);
+    // Reset browseMode to 'trending' on source switch to avoid SpigotMC-only
+    // modes (e.g. 'rating') being used in Modrinth searches
+    setBrowseMode('trending');
   }, [source]);
 
   // ---------- Search ----------
@@ -1068,8 +1025,10 @@ function PluginsTab({ serverUuid, profile }: { serverUuid: string; profile: any 
         const loaders = selectedLoader ? [selectedLoader] : (profile?.loaders?.length ? profile.loaders : undefined);
         const gameVersions = selectedGameVersion ? [selectedGameVersion] : (profile?.minecraftVersion ? [profile.minecraftVersion] : undefined);
         const categories = selectedCategory ? [selectedCategory] : undefined;
-        const isSearchMode = searchQ.trim().length > 0;
-        const sortIndex = isSearchMode ? 'relevance' : (modrinthSortMap[browseMode] || 'downloads');
+        // Always use the selected browse mode sort index.
+        // When searching, Modrinth uses the query for text matching
+        // AND sorts by the chosen index — not forced to 'relevance'.
+        const sortIndex = modrinthSortMap[browseMode] || 'relevance';
 
         const r = await pluginsApi.modrinthSearch(query, {
           limit: ITEMS_PER_PAGE,
@@ -1392,13 +1351,13 @@ function PluginsTab({ serverUuid, profile }: { serverUuid: string; profile: any 
         <div className="space-y-3">
           {/* Source selector row */}
           <div className="flex items-center gap-2">
-            <button onClick={() => setSource('modrinth')}
+            <button onClick={() => { setResults([]); setTotalHits(0); setCurrentPage(0); setSource('modrinth'); }}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${source === 'modrinth' ? 'text-[#1bd96a] shadow-lg' : 'text-gray-400 hover:text-white'}`}
               style={source === 'modrinth' ? { background: 'rgba(27,217,106,0.08)', border: '1px solid rgba(27,217,106,0.2)', boxShadow: '0 0 20px rgba(27,217,106,0.06)' } : { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
               <svg width="16" height="16" viewBox="0 0 512 514" fill="currentColor"><path d="M503.16 323.56C514.55 281.47 515.32 237.22 505.23 194.56C495.13 151.9 474.51 112.73 445.05 80.81L404.36 114.14C427.9 139.84 443.95 171.42 451.35 205.77C458.75 240.13 457.18 275.75 446.84 309.33L503.16 323.56Z"/><path d="M373.46 369.03C346.07 391.08 312.18 404.53 276.67 407.85L282.86 466.29C326.88 462.08 368.67 445.32 402.73 418.18L373.46 369.03Z"/><path d="M195.98 407.85C160.46 404.53 128.56 391.08 101.18 369.03L71.9 418.18C105.97 445.32 147.76 462.08 191.78 466.29L195.98 407.85Z"/><path d="M41.34 309.33C31 275.75 29.43 240.13 36.83 205.77C44.23 171.42 60.28 139.84 83.82 114.14L43.13 80.81C13.67 112.73 -6.95 151.9 -17.05 194.56C-27.14 237.22 -26.37 281.47 -14.98 323.56L41.34 309.33Z"/><path d="M255.74 0L175.53 134.69L255.74 134.69L335.96 134.69L255.74 0Z"/><path d="M255.74 513.84L335.96 379.15L255.74 379.15L175.53 379.15L255.74 513.84Z"/></svg>
               Modrinth
             </button>
-            <button onClick={() => spigotAllowed && setSource('spigot')} disabled={!spigotAllowed}
+            <button onClick={() => { if (!spigotAllowed) return; setResults([]); setTotalHits(0); setCurrentPage(0); setSource('spigot'); }} disabled={!spigotAllowed}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${source === 'spigot' ? 'text-[#ee8a18] shadow-lg' : 'text-gray-400 hover:text-white'}`}
               style={source === 'spigot' ? { background: 'rgba(238,138,24,0.08)', border: '1px solid rgba(238,138,24,0.2)', boxShadow: '0 0 20px rgba(238,138,24,0.06)' } : { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
               🔧 SpigotMC
@@ -1520,7 +1479,8 @@ function PluginsTab({ serverUuid, profile }: { serverUuid: string; profile: any 
                   ? item.icon_url
                   : (item.icon?.data ? `data:image/jpeg;base64,${item.icon.data}` : (item.icon?.url ? `https://api.spiget.org/v2/${item.icon.url}` : null));
                 const downloads = item.downloads || 0;
-                const author = source === 'modrinth' ? item.author : undefined;
+                const rawAuthor = source === 'modrinth' ? item.author : undefined;
+                const author = typeof rawAuthor === 'string' ? rawAuthor : (rawAuthor?.name ?? undefined);
                 const testedVersions = Array.isArray(item.testedVersions) ? item.testedVersions : [];
                 const displayCategories = source === 'modrinth' ? (item.display_categories || item.categories || []) : [];
                 const isExternal = source === 'spigot' && item.external;
@@ -1587,7 +1547,11 @@ function PluginsTab({ serverUuid, profile }: { serverUuid: string; profile: any 
                         </a>
                       )}
                       {/* Install button - opens version picker */}
-                      {isInstalled ? (
+                      {loadingInstalled ? (
+                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-gray-500" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <Loader2 className="w-3 h-3 animate-spin" /> Checking…
+                        </span>
+                      ) : isInstalled ? (
                         <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-emerald-400" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
                           <CheckCircle className="w-3.5 h-3.5" /> Installed
                         </span>

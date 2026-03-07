@@ -518,10 +518,11 @@ export class BillingService {
             }
         }
 
-        // ── Step 3: Suspend expired servers (that weren't auto-renewed) ──
+        // ── Step 3: Suspend expired paid servers (free servers handled by CreditsService) ──
         const expiredServers = await this.prisma.server.findMany({
             where: {
                 status: ServerStatus.ACTIVE,
+                isFreeServer: false,
                 expiresAt: { lte: now },
             },
             include: { user: true },

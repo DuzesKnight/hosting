@@ -140,8 +140,8 @@ export const pluginsApi = {
     ) => {
         const limit = opts?.limit ?? 20;
         const offset = opts?.offset ?? 0;
-        const projectType = opts?.projectType ?? 'mod';
-        let url = `/plugins/modrinth/search?query=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}&project_type=${encodeURIComponent(projectType)}`;
+        const projectType = opts?.projectType ?? 'plugin';
+        let url = `/plugins/modrinth/search?query=${encodeURIComponent(q || '')}&limit=${limit}&offset=${offset}&project_type=${encodeURIComponent(projectType)}`;
         if (opts?.loaders && opts.loaders.length > 0) url += `&loaders=${encodeURIComponent(JSON.stringify(opts.loaders))}`;
         if (opts?.categories && opts.categories.length > 0) url += `&categories=${encodeURIComponent(JSON.stringify(opts.categories))}`;
         if (opts?.gameVersions && opts.gameVersions.length > 0) url += `&game_versions=${encodeURIComponent(JSON.stringify(opts.gameVersions))}`;

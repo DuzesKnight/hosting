@@ -5,6 +5,9 @@ import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { setupConsoleProxy } from './ws-console.proxy';
+import { PrismaService } from './prisma/prisma.service';
+import { PterodactylClientService } from './modules/pterodactyl/pterodactyl-client.service';
 
 // ─── Colors ───────────────────────────────────────────────
 const c = {
@@ -120,6 +123,13 @@ async function bootstrap() {
     const port = config.get('BACKEND_PORT', 4000);
     const env = config.get('NODE_ENV', 'development');
     await app.listen(port, '0.0.0.0');
+
+    // ─── WebSocket Console Proxy ─────────────────────────
+    setupConsoleProxy(app.getHttpServer(), {
+        jwtSecret: config.get('JWT_SECRET', ''),
+        prisma: app.get(PrismaService),
+        pterodactylClient: app.get(PterodactylClientService),
+    });
 
     logSection('Server Online');
     logDone('Status', '🟢 Running');

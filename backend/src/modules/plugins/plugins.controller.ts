@@ -55,10 +55,10 @@ export class PluginsController {
         const parsedLoaders = loaders ? JSON.parse(loaders) as string[] : undefined;
         const parsedCategories = categories ? JSON.parse(categories) as string[] : undefined;
         const parsedGameVersions = gameVersions ? JSON.parse(gameVersions) as string[] : undefined;
-        return this.pluginsService.searchModrinth(query, {
+        return this.pluginsService.searchModrinth(query || '', {
             limit: parseInt(limit || '20'),
             offset: parseInt(offset || '0'),
-            projectType: projectType || 'mod',
+            projectType: projectType || 'plugin',
             loaders: parsedLoaders,
             categories: parsedCategories,
             gameVersions: parsedGameVersions,

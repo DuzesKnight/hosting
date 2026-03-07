@@ -21,6 +21,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 export class PterodactylClientService {
     private readonly logger = new Logger(PterodactylClientService.name);
     private api: AxiosInstance;
+    readonly panelUrl: string;
 
     private formatApiError(error: any): string {
         const axiosError = error as AxiosError<any>;
@@ -57,6 +58,7 @@ export class PterodactylClientService {
     constructor(private config: ConfigService) {
         const baseURL = config.get('PTERODACTYL_URL', 'http://localhost');
         const apiKey = config.get('PTERODACTYL_CLIENT_KEY', '');
+        this.panelUrl = baseURL;
 
         this.api = axios.create({
             baseURL: `${baseURL}/api/client`,

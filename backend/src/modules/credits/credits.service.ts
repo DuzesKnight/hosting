@@ -133,11 +133,18 @@ export class CreditsService {
         };
     }
 
-    // Auto-suspend free servers with expired credits
+    // Auto-suspend free servers whose renewal period has expired AND have no credits
     @Cron(CronExpression.EVERY_30_MINUTES)
     async checkFreeServerCredits() {
+        const now = new Date();
+
+        // Only check free servers whose expiresAt has actually passed
         const freeServers = await this.prisma.server.findMany({
-            where: { isFreeServer: true, status: ServerStatus.ACTIVE },
+            where: {
+                isFreeServer: true,
+                status: ServerStatus.ACTIVE,
+                expiresAt: { lte: now },
+            },
             include: { user: { include: { credits: true } } },
         });
 
@@ -156,7 +163,24 @@ export class CreditsService {
                     where: { id: server.id },
                     data: { status: ServerStatus.SUSPENDED },
                 });
-                this.logger.warn(`Free server ${server.id} suspended (no credits)`);
+                this.logger.warn(`Free server ${server.id} suspended (expired + no credits)`);
+            } else {
+                // User has credits — auto-renew the free server
+                try {
+                    await this.prisma.credit.update({
+                        where: { userId: server.userId },
+                        data: { amount: { decrement: 1 } },
+                    });
+                    const renewalDays = 7;
+                    const newExpiry = new Date(now.getTime() + renewalDays * 24 * 60 * 60 * 1000);
+                    await this.prisma.server.update({
+                        where: { id: server.id },
+                        data: { expiresAt: newExpiry, renewalNotified: false },
+                    });
+                    this.logger.log(`Free server ${server.id} auto-renewed with credits until ${newExpiry.toISOString()}`);
+                } catch (e: any) {
+                    this.logger.error(`Failed to auto-renew free server ${server.id}: ${e.message}`);
+                }
             }
         }
 
