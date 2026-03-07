@@ -3,12 +3,14 @@ set -euo pipefail
 
 # ============================================================
 # GameHost Platform — Safe Restart
-# Usage: bash restart.sh [--force] [--service <name>]
+# Usage: bash restart.sh [--force] [--service <name>] [--rebuild] [--no-cache]
 #
 # Options:
 #   --force           Skip confirmation prompt
 #   --service <name>  Restart only a specific service
 #                     (postgres, redis, backend, frontend, nginx)
+#   --rebuild         Force rebuild images (picks up code changes)
+#   --no-cache        Full rebuild from scratch (clears Docker layer cache)
 # ============================================================
 
 # ─── Build log (captured so errors are never lost) ────────
@@ -146,6 +148,8 @@ resolve_base_url() {
 # ─── Parse Arguments ──────────────────────────────────────
 FORCE=false
 TARGET_SERVICE=""
+REBUILD=false
+NO_CACHE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -157,13 +161,24 @@ while [[ $# -gt 0 ]]; do
       TARGET_SERVICE="$2"
       shift 2
       ;;
+    --rebuild|-r)
+      REBUILD=true
+      shift
+      ;;
+    --no-cache)
+      NO_CACHE=true
+      REBUILD=true
+      shift
+      ;;
     --help|-h)
-      echo "Usage: bash restart.sh [--force] [--service <name>]"
+      echo "Usage: bash restart.sh [--force] [--service <name>] [--rebuild] [--no-cache]"
       echo ""
       echo "Options:"
       echo "  --force, -f           Skip confirmation prompt"
       echo "  --service, -s <name>  Restart only a specific service"
       echo "                        (postgres, redis, backend, frontend, nginx)"
+      echo "  --rebuild, -r         Force rebuild images (picks up code changes)"
+      echo "  --no-cache            Full rebuild from scratch (clears Docker layer cache)"
       echo "  --help, -h            Show this help"
       exit 0
       ;;
@@ -209,6 +224,13 @@ if [ -n "$TARGET_SERVICE" ]; then
   info "Target: ${BOLD}${TARGET_SERVICE}${NC} (single service restart)"
 fi
 
+if $REBUILD; then
+  ok "Rebuild mode: ${YELLOW}images will be rebuilt${NC}"
+fi
+if $NO_CACHE; then
+  ok "No-cache mode: ${YELLOW}Docker layer cache will be cleared${NC}"
+fi
+
 section_end
 
 # ─── Confirmation ─────────────────────────────────────────
@@ -248,7 +270,19 @@ if [ -n "$TARGET_SERVICE" ]; then
 
   info "Stopping ${TARGET_SERVICE}..."
   $COMPOSE stop "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1 || true
+  $COMPOSE rm -f "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1 || true
   ok "Stopped ${TARGET_SERVICE}"
+
+  # Rebuild if requested
+  if $REBUILD; then
+    info "Rebuilding ${TARGET_SERVICE} image..."
+    BUILD_FLAGS=""
+    $NO_CACHE && BUILD_FLAGS="--no-cache"
+    if ! $COMPOSE build $BUILD_FLAGS "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1; then
+      fail "Failed to build ${TARGET_SERVICE} — check: cat ${BUILD_LOG}"
+    fi
+    ok "Rebuilt ${TARGET_SERVICE} image"
+  fi
 
   info "Starting ${TARGET_SERVICE}..."
   if ! $COMPOSE up -d "$TARGET_SERVICE" >> "$BUILD_LOG" 2>&1; then
@@ -299,35 +333,59 @@ else
 
   STOP_START=$(date +%s)
 
-  # Stop in reverse dependency order for clean shutdown
-  info "Stopping services in safe order..."
-
-  # 1. Stop nginx first (stop accepting new requests)
-  $COMPOSE stop nginx >> "$BUILD_LOG" 2>&1 && ok "Nginx stopped (no new traffic)" || detail "Nginx was not running"
-
-  # 2. Stop frontend (no more page loads)
-  $COMPOSE stop frontend >> "$BUILD_LOG" 2>&1 && ok "Frontend stopped" || detail "Frontend was not running"
-
-  # 3. Stop backend (let in-flight requests drain)
-  info "Draining backend connections (5s grace)..."
-  $COMPOSE stop -t 10 backend >> "$BUILD_LOG" 2>&1 && ok "Backend stopped (graceful)" || detail "Backend was not running"
-
-  # 4. Stop redis
-  $COMPOSE stop redis >> "$BUILD_LOG" 2>&1 && ok "Redis stopped" || detail "Redis was not running"
-
-  # 5. Stop postgres last (ensure all writes flushed)
-  $COMPOSE stop -t 15 postgres >> "$BUILD_LOG" 2>&1 && ok "PostgreSQL stopped (data flushed)" || detail "PostgreSQL was not running"
-
-  step_time $STOP_START "All services stopped safely"
-  section_end
-
-  # ── Remove Stopped Containers ──────────────────────────
-  section "Cleanup"
-
-  $COMPOSE rm -f >> "$BUILD_LOG" 2>&1
-  ok "Removed stopped containers"
+  info "Bringing all services down cleanly..."
+  # docker compose down = stop + rm + network cleanup, volumes preserved
+  $COMPOSE down --timeout 15 >> "$BUILD_LOG" 2>&1 && ok "All containers stopped & removed" || detail "No containers were running"
   detail "Volumes preserved (pgdata, redisdata)"
 
+  step_time $STOP_START "Clean shutdown completed"
+  section_end
+
+  # ── Clear Build Caches ─────────────────────────────────
+  if $REBUILD; then
+    section "Clearing Build Caches"
+
+    CACHE_START=$(date +%s)
+
+    # Clear Next.js .next cache so stale CSS/JS is never served
+    if [ -d "./frontend/.next" ]; then
+      rm -rf ./frontend/.next
+      ok "Cleared Next.js .next cache"
+    else
+      detail "No .next cache found (clean build)"
+    fi
+
+    # Clear backend dist cache
+    if [ -d "./backend/dist" ]; then
+      rm -rf ./backend/dist
+      ok "Cleared backend dist cache"
+    else
+      detail "No backend dist cache found"
+    fi
+
+    step_time $CACHE_START "Caches cleared"
+    section_end
+  fi
+
+  # ── Build Images ────────────────────────────────────────
+  section "Building Images"
+
+  BUILD_START=$(date +%s)
+
+  BUILD_FLAGS=""
+  if $REBUILD; then
+    BUILD_FLAGS="--build"
+  fi
+  if $NO_CACHE; then
+    BUILD_FLAGS="--build --no-cache"
+  fi
+  if [ -n "$BUILD_FLAGS" ]; then
+    info "Rebuilding with flags: ${BOLD}${BUILD_FLAGS}${NC}"
+  else
+    info "Using cached images (pass --rebuild to force rebuild)"
+  fi
+
+  step_time $BUILD_START "Build preparation ready"
   section_end
 
   # ── Start Services ─────────────────────────────────────
@@ -335,9 +393,22 @@ else
 
   UP_START=$(date +%s)
 
+  # Build images if rebuild was requested
+  if [ "$NO_CACHE" = true ]; then
+    info "Building images (no cache)..."
+    if ! $COMPOSE build --no-cache >> "$BUILD_LOG" 2>&1; then
+      fail "docker compose build --no-cache failed — check: cat ${BUILD_LOG}"
+    fi
+  elif [ -n "$BUILD_FLAGS" ]; then
+    info "Building images..."
+    if ! $COMPOSE build >> "$BUILD_LOG" 2>&1; then
+      fail "docker compose build failed — check: cat ${BUILD_LOG}"
+    fi
+  fi
+
+  info "Starting all containers..."
   if ! $COMPOSE up -d >> "$BUILD_LOG" 2>&1; then
-    fail "docker compose up -d failed! Check: docker compose logs --tail=50
-   Full log: ${BUILD_LOG}"
+    fail "docker compose up -d failed! Check: docker compose logs --tail=50\n   Full log: ${BUILD_LOG}"
   fi
   ok "PostgreSQL 16           ${DIM}(gamehost-db)${NC}"
   ok "Redis 7                 ${DIM}(gamehost-redis)${NC}"
