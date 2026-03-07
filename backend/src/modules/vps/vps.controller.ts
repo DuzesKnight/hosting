@@ -3,7 +3,7 @@ import { VpsService } from './vps.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ProvisionVpsDto, VpsActionDto } from '../../common/dto';
+import { ProvisionVpsDto, VpsActionDto, ReinstallVpsDto } from '../../common/dto';
 
 @Controller('vps')
 @UseGuards(JwtAuthGuard)
@@ -50,9 +50,9 @@ export class VpsController {
     }
 
     @Post(':id/reinstall')
-    async reinstall(@CurrentUser() user: any, @Param('id') id: string, @Body('os') os: string) {
+    async reinstall(@CurrentUser() user: any, @Param('id') id: string, @Body() body: ReinstallVpsDto) {
         await this.verifyVpsOwnership(user.id, id);
-        return this.vpsService.reinstallVps(id, os);
+        return this.vpsService.reinstallVps(id, body.os);
     }
 
     @Post(':id/renew')

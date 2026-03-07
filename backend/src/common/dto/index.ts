@@ -1,5 +1,5 @@
-import { IsString, IsNumber, IsOptional, IsBoolean, IsIn, Min, Max, MinLength, MaxLength, Matches } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsString, IsNumber, IsInt, IsOptional, IsBoolean, IsIn, IsArray, IsEmail, IsObject, Min, Max, MinLength, MaxLength, Matches, ValidateNested } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 
 // ─── File Operations ─────────────────────────────────────
 
@@ -66,11 +66,22 @@ export class CopyFileDto {
     location: string;
 }
 
+export class ChmodFileEntry {
+    @IsString()
+    file: string;
+
+    @IsString()
+    mode: string;
+}
+
 export class ChmodFilesDto {
     @IsString()
     root: string;
 
-    files: { file: string; mode: string }[];
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => ChmodFileEntry)
+    files: ChmodFileEntry[];
 }
 
 export class PullFileDto {
@@ -258,4 +269,165 @@ export class VpsActionDto {
     @IsString()
     @IsOptional()
     os?: string;
+}
+
+export class ReinstallVpsDto {
+    @IsString()
+    @MinLength(1)
+    os: string;
+}
+
+// ─── Users ───────────────────────────────────────────────
+
+export class UpdateProfileDto {
+    @IsString()
+    @IsOptional()
+    @MinLength(2)
+    @MaxLength(50)
+    @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+    name?: string;
+}
+
+export class ChangePasswordDto {
+    @IsString()
+    @IsOptional()
+    currentPassword?: string;
+
+    @IsString()
+    @MinLength(8)
+    @MaxLength(128)
+    newPassword: string;
+}
+
+// ─── Auth ────────────────────────────────────────────────
+
+export class ResendVerificationDto {
+    @IsEmail()
+    email: string;
+}
+
+// ─── Billing ─────────────────────────────────────────────
+
+export class VerifyRazorpayDto {
+    @IsString()
+    razorpay_order_id: string;
+
+    @IsString()
+    razorpay_payment_id: string;
+
+    @IsString()
+    razorpay_signature: string;
+}
+
+export class VerifyCashfreeDto {
+    @IsString()
+    orderId: string;
+}
+
+// ─── Players ─────────────────────────────────────────────
+
+export class PlayerNameDto {
+    @IsString()
+    @MinLength(1)
+    @MaxLength(32)
+    player: string;
+}
+
+export class BanPlayerDto {
+    @IsString()
+    @MinLength(1)
+    @MaxLength(32)
+    player: string;
+
+    @IsString()
+    @IsOptional()
+    @MaxLength(500)
+    reason?: string;
+}
+
+export class IpActionDto {
+    @IsString()
+    @MinLength(1)
+    ip: string;
+}
+
+export class BanIpDto {
+    @IsString()
+    @MinLength(1)
+    ip: string;
+
+    @IsString()
+    @IsOptional()
+    @MaxLength(500)
+    reason?: string;
+}
+
+export class KickPlayerDto {
+    @IsString()
+    @MinLength(1)
+    @MaxLength(32)
+    player: string;
+
+    @IsString()
+    @IsOptional()
+    @MaxLength(500)
+    reason?: string;
+}
+
+// ─── Plugins ─────────────────────────────────────────────
+
+export class InstallModrinthDto {
+    @IsString()
+    @MinLength(1)
+    projectId: string;
+
+    @IsString()
+    @MinLength(1)
+    versionId: string;
+}
+
+export class InstallSpigetDto {
+    @IsNumber()
+    resourceId: number;
+}
+
+export class InstallSpigetVersionDto {
+    @IsNumber()
+    resourceId: number;
+
+    @IsNumber()
+    versionId: number;
+}
+
+export class UpdatePluginDto {
+    @IsString()
+    @MinLength(1)
+    fileName: string;
+}
+
+export class UpdateAllPluginsDto {
+    @IsString()
+    @IsOptional()
+    @IsIn(['modrinth', 'spiget'])
+    source?: 'modrinth' | 'spiget';
+}
+
+// ─── Plans ───────────────────────────────────────────────
+
+export class CalculatePriceDto {
+    @IsString()
+    @MinLength(1)
+    planId: string;
+
+    @IsInt()
+    @Min(128)
+    ram: number;
+
+    @IsInt()
+    @Min(10)
+    cpu: number;
+
+    @IsInt()
+    @Min(256)
+    disk: number;
 }

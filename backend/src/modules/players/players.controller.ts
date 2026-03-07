@@ -3,6 +3,7 @@ import { PlayersService } from './players.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ServersService } from '../servers/servers.service';
+import { PlayerNameDto, BanPlayerDto, IpActionDto, BanIpDto, KickPlayerDto } from '../../common/dto';
 
 @Controller('players')
 @UseGuards(JwtAuthGuard)
@@ -35,9 +36,9 @@ export class PlayersController {
     }
 
     @Post(':uuid/whitelist')
-    async addWhitelist(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('player') player: string) {
+    async addWhitelist(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: PlayerNameDto) {
         await this.verifyOwnership(user, uuid);
-        return this.playersService.addToWhitelist(uuid, player);
+        return this.playersService.addToWhitelist(uuid, body.player);
     }
 
     @Delete(':uuid/whitelist/:player')
@@ -53,15 +54,15 @@ export class PlayersController {
     }
 
     @Post(':uuid/ban')
-    async ban(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: { player: string; reason?: string }) {
+    async ban(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: BanPlayerDto) {
         await this.verifyOwnership(user, uuid);
         return this.playersService.banPlayer(uuid, body.player, body.reason);
     }
 
     @Post(':uuid/unban')
-    async unban(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('player') player: string) {
+    async unban(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: PlayerNameDto) {
         await this.verifyOwnership(user, uuid);
-        return this.playersService.unbanPlayer(uuid, player);
+        return this.playersService.unbanPlayer(uuid, body.player);
     }
 
     @Get(':uuid/banned-ips')
@@ -71,15 +72,15 @@ export class PlayersController {
     }
 
     @Post(':uuid/ban-ip')
-    async banIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: { ip: string; reason?: string }) {
+    async banIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: BanIpDto) {
         await this.verifyOwnership(user, uuid);
         return this.playersService.banIp(uuid, body.ip, body.reason);
     }
 
     @Post(':uuid/unban-ip')
-    async unbanIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('ip') ip: string) {
+    async unbanIp(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: IpActionDto) {
         await this.verifyOwnership(user, uuid);
-        return this.playersService.unbanIp(uuid, ip);
+        return this.playersService.unbanIp(uuid, body.ip);
     }
 
     @Get(':uuid/playerdata')
@@ -101,19 +102,19 @@ export class PlayersController {
     }
 
     @Post(':uuid/op')
-    async op(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('player') player: string) {
+    async op(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: PlayerNameDto) {
         await this.verifyOwnership(user, uuid);
-        return this.playersService.opPlayer(uuid, player);
+        return this.playersService.opPlayer(uuid, body.player);
     }
 
     @Post(':uuid/deop')
-    async deop(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body('player') player: string) {
+    async deop(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: PlayerNameDto) {
         await this.verifyOwnership(user, uuid);
-        return this.playersService.deopPlayer(uuid, player);
+        return this.playersService.deopPlayer(uuid, body.player);
     }
 
     @Post(':uuid/kick')
-    async kick(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: { player: string; reason?: string }) {
+    async kick(@CurrentUser() user: any, @Param('uuid') uuid: string, @Body() body: KickPlayerDto) {
         await this.verifyOwnership(user, uuid);
         return this.playersService.kickPlayer(uuid, body.player, body.reason);
     }

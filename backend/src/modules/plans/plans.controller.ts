@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { PlansService } from './plans.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CalculatePriceDto } from '../../common/dto';
 
 @Controller('plans')
 export class PlansController {
@@ -30,7 +31,7 @@ export class PlansController {
 
     @Post('calculate')
     @UseGuards(JwtAuthGuard)
-    async calculatePrice(@Body() body: { planId: string; ram: number; cpu: number; disk: number }) {
+    async calculatePrice(@Body() body: CalculatePriceDto) {
         const plan = await this.plansService.getPlanById(body.planId);
         if (!plan) return { price: 0, ram: body.ram, cpu: body.cpu, disk: body.disk };
         const result = this.plansService.calculateCustomPrice(plan, body.ram, body.cpu, body.disk);

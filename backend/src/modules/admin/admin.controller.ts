@@ -1,5 +1,5 @@
 import {
-    Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards,
+    Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -77,6 +77,7 @@ export class AdminController {
     getSettings() { return this.adminService.getSettings(); }
 
     @Patch('settings')
+    @UsePipes(new ValidationPipe({ transform: true }))
     updateSettings(@Body() body: Record<string, string>) {
         return this.adminService.bulkUpdateSettings(body);
     }

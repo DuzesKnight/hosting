@@ -3,6 +3,7 @@ import { PluginsService } from './plugins.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ServersService } from '../servers/servers.service';
+import { InstallModrinthDto, InstallSpigetDto, InstallSpigetVersionDto, UpdatePluginDto, UpdateAllPluginsDto } from '../../common/dto';
 
 @Controller('plugins')
 @UseGuards(JwtAuthGuard)
@@ -93,7 +94,7 @@ export class PluginsController {
     async installModrinth(
         @CurrentUser() user: any,
         @Param('serverUuid') uuid: string,
-        @Body() body: { projectId: string; versionId: string },
+        @Body() body: InstallModrinthDto,
     ) {
         await this.verifyOwnership(user, uuid);
         return this.pluginsService.installFromModrinth(uuid, body.projectId, body.versionId);
@@ -152,16 +153,16 @@ export class PluginsController {
     }
 
     @Post(':serverUuid/spiget/install')
-    async installSpiget(@CurrentUser() user: any, @Param('serverUuid') uuid: string, @Body('resourceId') resourceId: number) {
+    async installSpiget(@CurrentUser() user: any, @Param('serverUuid') uuid: string, @Body() body: InstallSpigetDto) {
         await this.verifyOwnership(user, uuid);
-        return this.pluginsService.installFromSpiget(uuid, resourceId);
+        return this.pluginsService.installFromSpiget(uuid, body.resourceId);
     }
 
     @Post(':serverUuid/spiget/install-version')
     async installSpigetVersion(
         @CurrentUser() user: any,
         @Param('serverUuid') uuid: string,
-        @Body() body: { resourceId: number; versionId: number },
+        @Body() body: InstallSpigetVersionDto,
     ) {
         await this.verifyOwnership(user, uuid);
         return this.pluginsService.installFromSpigetVersion(uuid, body.resourceId, body.versionId);
@@ -171,19 +172,19 @@ export class PluginsController {
     async updateOne(
         @CurrentUser() user: any,
         @Param('serverUuid') uuid: string,
-        @Body('fileName') fileName: string,
+        @Body() body: UpdatePluginDto,
     ) {
         await this.verifyOwnership(user, uuid);
-        return this.pluginsService.updateOnePlugin(uuid, fileName);
+        return this.pluginsService.updateOnePlugin(uuid, body.fileName);
     }
 
     @Post(':serverUuid/update-all')
     async updateAll(
         @CurrentUser() user: any,
         @Param('serverUuid') uuid: string,
-        @Body('source') source?: 'modrinth' | 'spiget',
+        @Body() body: UpdateAllPluginsDto,
     ) {
         await this.verifyOwnership(user, uuid);
-        return this.pluginsService.updateAllPlugins(uuid, source);
+        return this.pluginsService.updateAllPlugins(uuid, body.source);
     }
 }

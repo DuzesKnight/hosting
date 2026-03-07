@@ -7,7 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { CreatePaymentDto, SubmitUpiDto, AddBalanceDto } from '../../common/dto';
+import { CreatePaymentDto, SubmitUpiDto, AddBalanceDto, VerifyRazorpayDto, VerifyCashfreeDto } from '../../common/dto';
 
 @Controller('billing')
 @Throttle({ default: { limit: 30, ttl: 60000 } })
@@ -56,7 +56,7 @@ export class BillingController {
 
     @Post('razorpay/verify')
     @UseGuards(JwtAuthGuard)
-    verifyRazorpay(@Body() body: any) {
+    verifyRazorpay(@Body() body: VerifyRazorpayDto) {
         return this.billingService.verifyRazorpayPayment(body);
     }
 
@@ -70,8 +70,8 @@ export class BillingController {
 
     @Post('cashfree/verify')
     @UseGuards(JwtAuthGuard)
-    verifyCashfree(@Body('orderId') orderId: string) {
-        return this.billingService.verifyCashfreePayment(orderId);
+    verifyCashfree(@Body() body: VerifyCashfreeDto) {
+        return this.billingService.verifyCashfreePayment(body.orderId);
     }
 
     // --- UPI ---

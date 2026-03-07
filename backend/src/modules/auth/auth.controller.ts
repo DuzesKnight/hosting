@@ -9,6 +9,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ResendVerificationDto } from '../../common/dto';
 
 @Controller('auth')
 @Throttle({ default: { limit: 20, ttl: 60000 } })
@@ -64,11 +65,8 @@ export class AuthController {
 
     @Post('resend-verification')
     @Throttle({ default: { limit: 3, ttl: 60000 } })
-    async resendVerification(@Body('email') email: string) {
-        if (!email || typeof email !== 'string' || !email.includes('@')) {
-            throw new BadRequestException('Valid email is required');
-        }
-        return this.authService.resendVerification(email);
+    async resendVerification(@Body() body: ResendVerificationDto) {
+        return this.authService.resendVerification(body.email);
     }
 
     // ============================================================
