@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
+import { RedisModule } from './common/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { PterodactylModule } from './modules/pterodactyl/pterodactyl.module';
@@ -19,6 +20,7 @@ import { DiscordModule } from './modules/discord/discord.module';
 import { CloudflareModule } from './modules/cloudflare/cloudflare.module';
 import { PaymenterModule } from './modules/paymenter/paymenter.module';
 import { HealthModule } from './common/health/health.module';
+import { RequestLoggerMiddleware } from './common/middleware/request-logger.middleware';
 
 @Module({
     imports: [
@@ -26,6 +28,7 @@ import { HealthModule } from './common/health/health.module';
         ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
         ScheduleModule.forRoot(),
         PrismaModule,
+        RedisModule,
         AuthModule,
         UsersModule,
         PterodactylModule,
@@ -48,4 +51,8 @@ import { HealthModule } from './common/health/health.module';
         { provide: APP_GUARD, useClass: ThrottlerGuard },
     ],
 })
-export class AppModule { }
+export class AppModule implements NestModule {
+    configure(consumer: MiddlewareConsumer) {
+        consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+    }
+}

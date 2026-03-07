@@ -3,6 +3,7 @@ import { VpsService } from './vps.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProvisionVpsDto, VpsActionDto } from '../../common/dto';
 
 @Controller('vps')
 @UseGuards(JwtAuthGuard)
@@ -32,7 +33,7 @@ export class VpsController {
     getMyVps(@CurrentUser() user: any) { return this.vpsService.getUserVps(user.id); }
 
     @Post()
-    provision(@CurrentUser() user: any, @Body() body: any) {
+    provision(@CurrentUser() user: any, @Body() body: ProvisionVpsDto) {
         return this.vpsService.provisionVps(user.id, body);
     }
 
@@ -43,9 +44,9 @@ export class VpsController {
     }
 
     @Post(':id/control')
-    async control(@CurrentUser() user: any, @Param('id') id: string, @Body('action') action: any) {
+    async control(@CurrentUser() user: any, @Param('id') id: string, @Body() body: VpsActionDto) {
         await this.verifyVpsOwnership(user.id, id);
-        return this.vpsService.controlVps(id, action);
+        return this.vpsService.controlVps(id, body.action);
     }
 
     @Post(':id/reinstall')

@@ -12,5 +12,9 @@
     "logs:backend": "docker compose logs -f backend",
     "logs:frontend": "docker compose logs -f frontend",
     "status": "docker compose ps"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.5.0"
   }
 }

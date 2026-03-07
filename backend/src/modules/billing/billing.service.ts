@@ -6,6 +6,7 @@ import { ServersService } from '../servers/servers.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
 import { DiscordService } from '../discord/discord.service';
 import { EmailService } from '../auth/email.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { PaymentGateway, PaymentStatus, ServerStatus, UpiStatus } from '@prisma/client';
 import axios from 'axios';
 import * as crypto from 'crypto';
@@ -21,6 +22,7 @@ export class BillingService {
         private pterodactyl: PterodactylService,
         private discord: DiscordService,
         private email: EmailService,
+        private redis: RedisService,
     ) { }
 
     // ========== RAZORPAY ==========
@@ -418,6 +420,20 @@ export class BillingService {
 
     @Cron(CronExpression.EVERY_HOUR)
     async checkRenewals() {
+        const lockKey = 'lock:billing:checkRenewals';
+        const acquired = await this.redis.acquireLock(lockKey, 300); // 5 min lock
+        if (!acquired) {
+            this.logger.debug('checkRenewals: skipped — another instance holds the lock');
+            return;
+        }
+        try {
+            await this._checkRenewals();
+        } finally {
+            await this.redis.releaseLock(lockKey);
+        }
+    }
+
+    private async _checkRenewals() {
         const now = new Date();
         const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
         const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
@@ -617,19 +633,21 @@ export class BillingService {
 
         // Verify webhook signature using raw body and X-Razorpay-Signature header
         const secret = this.config.get('RAZORPAY_WEBHOOK_SECRET', '');
-        if (secret) {
-            if (!rawBody || !signature) {
-                this.logger.warn('Razorpay webhook: missing raw body or signature — rejecting');
-                return { status: 'invalid_signature' };
-            }
-            const expectedSig = crypto
-                .createHmac('sha256', secret)
-                .update(rawBody)
-                .digest('hex');
-            if (expectedSig !== signature) {
-                this.logger.warn('Razorpay webhook: invalid signature — rejecting');
-                return { status: 'invalid_signature' };
-            }
+        if (!secret) {
+            this.logger.error('Razorpay webhook: RAZORPAY_WEBHOOK_SECRET not configured — rejecting');
+            return { status: 'configuration_error' };
+        }
+        if (!rawBody || !signature) {
+            this.logger.warn('Razorpay webhook: missing raw body or signature — rejecting');
+            return { status: 'invalid_signature' };
+        }
+        const expectedSig = crypto
+            .createHmac('sha256', secret)
+            .update(rawBody)
+            .digest('hex');
+        if (!crypto.timingSafeEqual(Buffer.from(expectedSig, 'hex'), Buffer.from(signature, 'hex'))) {
+            this.logger.warn('Razorpay webhook: invalid signature — rejecting');
+            return { status: 'invalid_signature' };
         }
 
         if (event === 'payment.captured') {
@@ -673,19 +691,21 @@ export class BillingService {
 
         // Verify Cashfree webhook signature using raw body + x-cashfree-signature/timestamp headers
         const cfSecret = this.config.get('CASHFREE_WEBHOOK_SECRET', '');
-        if (cfSecret) {
-            if (!rawBody || !signature) {
-                this.logger.warn('Cashfree webhook: missing raw body or signature — rejecting');
-                return { status: 'invalid_signature' };
-            }
-            const expectedSig = crypto
-                .createHmac('sha256', cfSecret)
-                .update(timestamp + rawBody)
-                .digest('base64');
-            if (expectedSig !== signature) {
-                this.logger.warn('Cashfree webhook: invalid signature — rejecting');
-                return { status: 'invalid_signature' };
-            }
+        if (!cfSecret) {
+            this.logger.error('Cashfree webhook: CASHFREE_WEBHOOK_SECRET not configured — rejecting');
+            return { status: 'configuration_error' };
+        }
+        if (!rawBody || !signature) {
+            this.logger.warn('Cashfree webhook: missing raw body or signature — rejecting');
+            return { status: 'invalid_signature' };
+        }
+        const expectedSig = crypto
+            .createHmac('sha256', cfSecret)
+            .update(timestamp + rawBody)
+            .digest('base64');
+        if (!crypto.timingSafeEqual(Buffer.from(expectedSig, 'base64'), Buffer.from(signature, 'base64'))) {
+            this.logger.warn('Cashfree webhook: invalid signature — rejecting');
+            return { status: 'invalid_signature' };
         }
 
         if (event === 'PAYMENT_SUCCESS_WEBHOOK') {

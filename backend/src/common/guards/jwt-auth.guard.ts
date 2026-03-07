@@ -1,14 +1,20 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as jwt from 'jsonwebtoken';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
+
+const USER_CACHE_TTL = 60; // seconds — balance/credits cached for 60s max
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
+    private readonly logger = new Logger(JwtAuthGuard.name);
+
     constructor(
         private config: ConfigService,
         private prisma: PrismaService,
-    ) { }
+        private redis: RedisService,
+    ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const request = context.switchToHttp().getRequest();
@@ -18,33 +24,68 @@ export class JwtAuthGuard implements CanActivate {
             throw new UnauthorizedException('No token provided');
         }
 
+        const secret = this.config.get<string>('JWT_SECRET', '');
+        if (!secret) throw new UnauthorizedException('JWT secret not configured');
+
+        let payload: any;
         try {
-            const secret = this.config.get<string>('JWT_SECRET', '');
-            if (!secret) throw new UnauthorizedException('JWT secret not configured');
-            const payload: any = jwt.verify(token, secret);
-            const user = await this.prisma.user.findUnique({
-                where: { id: payload.sub },
-                include: { balance: true, credits: true, linkedAccounts: true },
-            });
-
-            if (!user) {
-                throw new UnauthorizedException('User not found');
-            }
-
-            request.user = user;
-            return true;
+            payload = jwt.verify(token, secret, { algorithms: ['HS256'] });
         } catch {
-            throw new UnauthorizedException('Invalid token');
+            throw new UnauthorizedException('Invalid or expired token');
         }
+
+        if (!payload?.sub || typeof payload.sub !== 'string') {
+            throw new UnauthorizedException('Malformed token payload');
+        }
+
+        // Check Redis cache first to avoid DB hit on every request
+        const cacheKey = `user:session:${payload.sub}`;
+        const cached = await this.redis.get(cacheKey);
+        if (cached) {
+            try {
+                const user = JSON.parse(cached);
+                // Verify user is not deleted/banned while cached
+                if (!user || user._deleted) {
+                    await this.redis.del(cacheKey);
+                    throw new UnauthorizedException('Account no longer exists');
+                }
+                request.user = user;
+                return true;
+            } catch (e) {
+                if (e instanceof UnauthorizedException) throw e;
+                // Cache parse error — fall through to DB
+                await this.redis.del(cacheKey);
+            }
+        }
+
+        // DB lookup — only happens once per USER_CACHE_TTL seconds
+        const user = await this.prisma.user.findUnique({
+            where: { id: payload.sub },
+            include: { balance: true, credits: true, linkedAccounts: true },
+        });
+
+        if (!user) {
+            throw new UnauthorizedException('User not found');
+        }
+
+        // Cache user data for subsequent requests
+        try {
+            await this.redis.set(cacheKey, JSON.stringify(user), USER_CACHE_TTL);
+        } catch {
+            // Redis down — non-fatal, just skip caching
+        }
+
+        request.user = user;
+        return true;
     }
 
     private extractToken(request: any): string | null {
-        // Check cookie first, then Authorization header
+        // Check cookie first (primary auth), then Authorization header (API clients)
         if (request.cookies?.token) {
             return request.cookies.token;
         }
-        const authHeader = request.headers.authorization;
-        if (authHeader?.startsWith('Bearer ')) {
+        const authHeader = request.headers?.authorization;
+        if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
             return authHeader.substring(7);
         }
         return null;

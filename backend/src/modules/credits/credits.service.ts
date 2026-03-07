@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PterodactylService } from '../pterodactyl/pterodactyl.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { ServerStatus } from '@prisma/client';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class CreditsService {
         private prisma: PrismaService,
         private config: ConfigService,
         private pterodactyl: PterodactylService,
+        private redis: RedisService,
     ) { }
 
     async getCredits(userId: string): Promise<number> {
@@ -136,6 +138,20 @@ export class CreditsService {
     // Auto-suspend free servers whose renewal period has expired AND have no credits
     @Cron(CronExpression.EVERY_30_MINUTES)
     async checkFreeServerCredits() {
+        const lockKey = 'lock:credits:checkFreeServerCredits';
+        const acquired = await this.redis.acquireLock(lockKey, 180); // 3 min lock
+        if (!acquired) {
+            this.logger.debug('checkFreeServerCredits: skipped — another instance holds the lock');
+            return;
+        }
+        try {
+            await this._checkFreeServerCredits();
+        } finally {
+            await this.redis.releaseLock(lockKey);
+        }
+    }
+
+    private async _checkFreeServerCredits() {
         const now = new Date();
 
         // Only check free servers whose expiresAt has actually passed

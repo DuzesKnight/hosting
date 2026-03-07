@@ -7,7 +7,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '@prisma/client';
-import { CreatePlanDto, UpdatePlanDto, SetRoleDto } from './dto/admin.dto';
+import { CreatePlanDto, UpdatePlanDto, SetRoleDto, UpdateVpsPlanDto, DeleteAltsDto } from './dto/admin.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -111,8 +111,8 @@ export class AdminController {
     }
 
     @Post('alts/delete')
-    deleteAlts(@Body('userIds') userIds: string[], @CurrentUser() user: any) {
-        return this.adminService.deleteAltAccounts(userIds, user.id);
+    deleteAlts(@Body() body: DeleteAltsDto, @CurrentUser() user: any) {
+        return this.adminService.deleteAltAccounts(body.userIds, user.id);
     }
 
     // --- VPS Plans ---
@@ -123,7 +123,7 @@ export class AdminController {
     syncVpsPlans() { return this.adminService.syncVpsPlansFromDatalix(); }
 
     @Patch('vps/plans/:id')
-    updateVpsPlan(@Param('id') id: string, @Body() body: any) {
+    updateVpsPlan(@Param('id') id: string, @Body() body: UpdateVpsPlanDto) {
         return this.adminService.updateVpsPlan(id, body);
     }
 

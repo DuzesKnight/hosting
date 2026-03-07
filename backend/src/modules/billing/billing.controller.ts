@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CreatePaymentDto, SubmitUpiDto, AddBalanceDto } from '../../common/dto';
 
 @Controller('billing')
 @Throttle({ default: { limit: 30, ttl: 60000 } })
@@ -27,22 +28,10 @@ export class BillingController {
     @Post('balance/add')
     @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(Role.ADMIN)
-    async addBalance(@CurrentUser() user: any, @Body() body: { amount: number; userId?: string }) {
-        const amount = body.amount;
-        if (!amount || amount <= 0 || amount > 100000) {
-            throw new BadRequestException('Amount must be between 1 and 100000');
-        }
+    async addBalance(@CurrentUser() user: any, @Body() body: AddBalanceDto) {
         // If userId is provided, add to that user; otherwise add to admin's own
         const targetUserId = body.userId || user.id;
-        // Validate target user exists
-        if (body.userId) {
-            const targetUser = await this.billingService.getBalance(targetUserId);
-            if (targetUser === null || targetUser === undefined) {
-                // getBalance returns 0 for non-existent users due to optional chaining
-                // so we do an explicit check
-            }
-        }
-        return this.billingService.addBalance(targetUserId, amount, 'ADMIN_ADD', `Admin ${user.id} added balance`, undefined);
+        return this.billingService.addBalance(targetUserId, body.amount, 'ADMIN_ADD', `Admin ${user.id} added balance`, undefined);
     }
 
     @Get('payments')
@@ -61,7 +50,7 @@ export class BillingController {
     @Post('razorpay/create')
     @UseGuards(JwtAuthGuard)
     @Throttle({ default: { limit: 10, ttl: 60000 } })
-    createRazorpayOrder(@CurrentUser() user: any, @Body() body: { amount: number; serverId?: string }) {
+    createRazorpayOrder(@CurrentUser() user: any, @Body() body: CreatePaymentDto) {
         return this.billingService.createRazorpayOrder(user.id, body.amount, body.serverId);
     }
 
@@ -75,7 +64,7 @@ export class BillingController {
     @Post('cashfree/create')
     @UseGuards(JwtAuthGuard)
     @Throttle({ default: { limit: 10, ttl: 60000 } })
-    createCashfreeOrder(@CurrentUser() user: any, @Body() body: { amount: number; serverId?: string }) {
+    createCashfreeOrder(@CurrentUser() user: any, @Body() body: CreatePaymentDto) {
         return this.billingService.createCashfreeOrder(user.id, body.amount, body.serverId);
     }
 
@@ -88,14 +77,14 @@ export class BillingController {
     // --- UPI ---
     @Post('upi/submit')
     @UseGuards(JwtAuthGuard)
-    submitUpi(@CurrentUser() user: any, @Body() body: { utr: string; amount: number; serverId?: string; planId?: string }) {
+    submitUpi(@CurrentUser() user: any, @Body() body: SubmitUpiDto) {
         return this.billingService.submitUpiPayment(user.id, body.utr, body.amount, body.serverId, body.planId);
     }
 
     // --- Balance ---
     @Post('balance/pay')
     @UseGuards(JwtAuthGuard)
-    payWithBalance(@CurrentUser() user: any, @Body() body: { amount: number; serverId?: string }) {
+    payWithBalance(@CurrentUser() user: any, @Body() body: CreatePaymentDto) {
         return this.billingService.payWithBalance(user.id, body.amount, body.serverId);
     }
 

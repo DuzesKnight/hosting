@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -87,6 +88,19 @@ async function bootstrap() {
     const config = app.get(ConfigService);
     logDone('NestJS application created');
 
+    // ─── Environment Validation (fail-fast) ──────────────
+    const requiredVars = ['JWT_SECRET', 'DATABASE_URL'];
+    const missing = requiredVars.filter(v => !config.get(v));
+    if (missing.length > 0) {
+        console.error(`\x1b[31m\x1b[1m   ✘  Missing required environment variables: ${missing.join(', ')}\x1b[0m`);
+        process.exit(1);
+    }
+    if (config.get('JWT_SECRET', '').length < 32) {
+        console.error(`\x1b[31m\x1b[1m   ✘  JWT_SECRET must be at least 32 characters for security\x1b[0m`);
+        process.exit(1);
+    }
+    logDone('Environment validated');
+
     // ─── Global Prefix ───────────────────────────────────
     app.setGlobalPrefix('api', {
         exclude: [{ path: '/', method: RequestMethod.GET }],
@@ -94,14 +108,34 @@ async function bootstrap() {
     logDone('Global prefix', '/api');
 
     // ─── Security ────────────────────────────────────────
-    app.use(helmet({ contentSecurityPolicy: false }));
+    app.use(helmet({
+        contentSecurityPolicy: {
+            directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'", "'unsafe-inline'"],
+                styleSrc: ["'self'", "'unsafe-inline'"],
+                imgSrc: ["'self'", 'data:', 'https:'],
+                connectSrc: ["'self'", 'wss:', 'ws:'],
+            },
+        },
+        crossOriginEmbedderPolicy: false, // Allow framing for payment gateways
+    }));
     app.use(cookieParser());
-    logDone('Security middleware', 'Helmet + Cookie Parser');
+    logDone('Security middleware', 'Helmet (CSP+HSTS) + Cookie Parser');
 
     // ─── CORS ────────────────────────────────────────────
     const corsOrigin = config.get('APP_URL', 'http://localhost:3000');
-    app.enableCors({ origin: corsOrigin, credentials: true });
-    logDone('CORS enabled', corsOrigin);
+    const corsOrigins = config.get('CORS_ORIGINS', '') 
+        ? config.get('CORS_ORIGINS', '').split(',').map((o: string) => o.trim()) 
+        : [corsOrigin];
+    app.enableCors({ 
+        origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins, 
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+        maxAge: 86400,
+    });
+    logDone('CORS enabled', corsOrigins.join(', '));
 
     // ─── Validation ──────────────────────────────────────
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -113,6 +147,22 @@ async function bootstrap() {
         }),
     );
     logDone('Validation & error handling');
+
+    // ─── Swagger / API Documentation ─────────────────────
+    if (config.get('NODE_ENV', 'development') !== 'production' || config.get('SWAGGER_ENABLED') === 'true') {
+        const swaggerConfig = new DocumentBuilder()
+            .setTitle('GameHost API')
+            .setDescription('Enterprise-grade Game Server Hosting Platform API')
+            .setVersion('1.0')
+            .addBearerAuth()
+            .addCookieAuth('token')
+            .build();
+        const document = SwaggerModule.createDocument(app, swaggerConfig);
+        SwaggerModule.setup('api/docs', app, document, {
+            swaggerOptions: { persistAuthorization: true },
+        });
+        logDone('Swagger API Docs', '/api/docs');
+    }
 
     // ─── Shutdown Hooks ──────────────────────────────────
     app.enableShutdownHooks();

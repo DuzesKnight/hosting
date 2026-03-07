@@ -6,6 +6,13 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateServerDto } from './dto/create-server.dto';
 import { PowerActionDto } from './dto/power-action.dto';
+import {
+    WriteFileDto, DeleteFilesDto, RenameFileDto, CreateDirectoryDto,
+    CompressFilesDto, DecompressFileDto, CopyFileDto, PullFileDto, ChmodFilesDto,
+    RenameServerDto, ChangeDockerImageDto, UpdateStartupDto, CreateDatabaseDto,
+    CreateScheduleDto, CreateScheduleTaskDto, RestoreBackupDto, SendCommandDto,
+} from '../../common/dto';
+import { validateExternalUrl } from '../../common/utils/ssrf-guard';
 
 @Controller('servers')
 @UseGuards(JwtAuthGuard)
@@ -45,9 +52,8 @@ export class ServersController {
     }
 
     @Post(':id/command')
-    sendCommand(@CurrentUser() user: any, @Param('id') id: string, @Body('command') command: string) {
-        if (!command || typeof command !== 'string') throw new BadRequestException('Command is required');
-        return this.serversService.sendConsoleCommand(user.id, id, command);
+    sendCommand(@CurrentUser() user: any, @Param('id') id: string, @Body() body: SendCommandDto) {
+        return this.serversService.sendConsoleCommand(user.id, id, body.command);
     }
 
     @Get(':id/files')
@@ -61,12 +67,12 @@ export class ServersController {
     }
 
     @Post(':id/files/write')
-    writeFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { file: string; content: string }) {
+    writeFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: WriteFileDto) {
         return this.serversService.writeFile(user.id, id, body.file, body.content);
     }
 
     @Post(':id/files/delete')
-    deleteFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; files: string[] }) {
+    deleteFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: DeleteFilesDto) {
         return this.serversService.deleteFiles(user.id, id, body.root, body.files);
     }
 
@@ -91,8 +97,8 @@ export class ServersController {
     }
 
     @Post(':id/databases')
-    createDatabase(@CurrentUser() user: any, @Param('id') id: string, @Body('name') name: string) {
-        return this.serversService.createDatabase(user.id, id, name);
+    createDatabase(@CurrentUser() user: any, @Param('id') id: string, @Body() body: CreateDatabaseDto) {
+        return this.serversService.createDatabase(user.id, id, body.name);
     }
 
     @Get(':id/network')
@@ -106,7 +112,7 @@ export class ServersController {
     }
 
     @Post(':id/startup')
-    updateStartup(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { key: string; value: string }) {
+    updateStartup(@CurrentUser() user: any, @Param('id') id: string, @Body() body: UpdateStartupDto) {
         return this.serversService.updateStartupVariable(user.id, id, body.key, body.value);
     }
 
@@ -126,12 +132,12 @@ export class ServersController {
     }
 
     @Put(':id/files/rename')
-    renameFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; from: string; to: string }) {
+    renameFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: RenameFileDto) {
         return this.serversService.renameFile(user.id, id, body.root, body.from, body.to);
     }
 
     @Post(':id/files/folder')
-    createDirectory(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; name: string }) {
+    createDirectory(@CurrentUser() user: any, @Param('id') id: string, @Body() body: CreateDirectoryDto) {
         return this.serversService.createDirectory(user.id, id, body.root, body.name);
     }
 
@@ -153,12 +159,12 @@ export class ServersController {
     // ========== FILE OPERATIONS (NEW) ==========
 
     @Post(':id/files/compress')
-    compressFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; files: string[] }) {
+    compressFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: CompressFilesDto) {
         return this.serversService.compressFiles(user.id, id, body.root, body.files);
     }
 
     @Post(':id/files/decompress')
-    decompressFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; file: string }) {
+    decompressFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: DecompressFileDto) {
         return this.serversService.decompressFile(user.id, id, body.root, body.file);
     }
 
@@ -169,24 +175,26 @@ export class ServersController {
     }
 
     @Post(':id/files/copy')
-    copyFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { location: string }) {
+    copyFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: CopyFileDto) {
         return this.serversService.copyFile(user.id, id, body.location);
     }
 
     @Post(':id/files/chmod')
-    chmodFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { root: string; files: { file: string; mode: string }[] }) {
+    chmodFiles(@CurrentUser() user: any, @Param('id') id: string, @Body() body: ChmodFilesDto) {
         return this.serversService.chmodFiles(user.id, id, body.root, body.files);
     }
 
     @Post(':id/files/pull')
-    pullFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { url: string; directory: string; filename?: string }) {
+    pullFile(@CurrentUser() user: any, @Param('id') id: string, @Body() body: PullFileDto) {
+        // SSRF protection — block requests to internal/private IP ranges
+        validateExternalUrl(body.url);
         return this.serversService.pullFile(user.id, id, body.url, body.directory, body.filename);
     }
 
     // ========== BACKUP OPERATIONS (NEW) ==========
 
     @Post(':id/backups/:backupId/restore')
-    restoreBackup(@CurrentUser() user: any, @Param('id') id: string, @Param('backupId') backupId: string, @Body() body: { truncate?: boolean }) {
+    restoreBackup(@CurrentUser() user: any, @Param('id') id: string, @Param('backupId') backupId: string, @Body() body: RestoreBackupDto) {
         return this.serversService.restoreBackup(user.id, id, backupId, body?.truncate);
     }
 
@@ -205,14 +213,12 @@ export class ServersController {
     // ========== SERVER SETTINGS (NEW) ==========
 
     @Post(':id/settings/rename')
-    renameServer(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { name: string }) {
-        if (!body.name || body.name.trim().length < 2) throw new BadRequestException('Name must be at least 2 characters');
-        return this.serversService.renameServer(user.id, id, body.name.trim());
+    renameServer(@CurrentUser() user: any, @Param('id') id: string, @Body() body: RenameServerDto) {
+        return this.serversService.renameServer(user.id, id, body.name);
     }
 
     @Put(':id/settings/docker-image')
-    changeDockerImage(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { docker_image: string }) {
-        if (!body.docker_image) throw new BadRequestException('Docker image is required');
+    changeDockerImage(@CurrentUser() user: any, @Param('id') id: string, @Body() body: ChangeDockerImageDto) {
         return this.serversService.changeDockerImage(user.id, id, body.docker_image);
     }
 
@@ -229,18 +235,12 @@ export class ServersController {
     }
 
     @Post(':id/schedules')
-    createSchedule(@CurrentUser() user: any, @Param('id') id: string, @Body() body: {
-        name: string; is_active: boolean; minute: string; hour: string;
-        day_of_week: string; day_of_month: string; month: string;
-    }) {
+    createSchedule(@CurrentUser() user: any, @Param('id') id: string, @Body() body: CreateScheduleDto) {
         return this.serversService.createSchedule(user.id, id, body);
     }
 
     @Post(':id/schedules/:scheduleId')
-    updateSchedule(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Body() body: {
-        name: string; is_active: boolean; minute: string; hour: string;
-        day_of_week: string; day_of_month: string; month: string;
-    }) {
+    updateSchedule(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Body() body: CreateScheduleDto) {
         return this.serversService.updateSchedule(user.id, id, parseInt(scheduleId), body);
     }
 
@@ -255,18 +255,12 @@ export class ServersController {
     }
 
     @Post(':id/schedules/:scheduleId/tasks')
-    createScheduleTask(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Body() body: {
-        action: 'command' | 'power' | 'backup'; payload: string;
-        time_offset: number; continue_on_failure?: boolean;
-    }) {
+    createScheduleTask(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Body() body: CreateScheduleTaskDto) {
         return this.serversService.createScheduleTask(user.id, id, parseInt(scheduleId), body);
     }
 
     @Post(':id/schedules/:scheduleId/tasks/:taskId')
-    updateScheduleTask(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Param('taskId') taskId: string, @Body() body: {
-        action: 'command' | 'power' | 'backup'; payload: string;
-        time_offset: number; continue_on_failure?: boolean;
-    }) {
+    updateScheduleTask(@CurrentUser() user: any, @Param('id') id: string, @Param('scheduleId') scheduleId: string, @Param('taskId') taskId: string, @Body() body: CreateScheduleTaskDto) {
         return this.serversService.updateScheduleTask(user.id, id, parseInt(scheduleId), parseInt(taskId), body);
     }
 

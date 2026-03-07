@@ -130,3 +130,21 @@ export class AddBalanceDto {
     @IsString()
     userId?: string;
 }
+
+export class UpdateVpsPlanDto {
+    @IsOptional() @IsString() @MaxLength(100) name?: string;
+    @IsOptional() @IsNumber() @Min(0) pricePerMonth?: number;
+    @IsOptional() @IsBoolean() isActive?: boolean;
+    @IsOptional() @IsInt() @Min(0) sortOrder?: number;
+}
+
+export class DeleteAltsDto {
+    @IsString({ each: true })
+    userIds: string[];
+}
+
+export class UpdateSettingsDto {
+    // Validated as a flat key-value record — keys & values must be strings
+    // Using a record type so no additional decorators needed beyond the controller pipe
+}
+
